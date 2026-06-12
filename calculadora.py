@@ -32,10 +32,10 @@ def estimar_frete_jpy(modalidade, peso_g):
         
     if modalidade == 'ePacket':
         if peso_g > 2000: return None
-        if peso_g <= 100: return 840
-        # Sobe 190 ienes a cada 100g adicionais
+        if peso_g <= 100: return 920
+        # Sobe 260 ienes a cada 100g adicionais
         degraus = math.ceil((peso_g - 100) / 100)
-        return 840 + (degraus * 190)
+        return 920 + (degraus * 260)
             
     elif modalidade == 'Air Parcel':
         if peso_g > 30000: return None
@@ -134,7 +134,7 @@ st.set_page_config(page_title="Calculadora de Frete", page_icon="📦", layout="
 st.title("📦 Calculadora de Envios Internacionais")
 st.write("Digite o nome, as dimensões (em mm) e o peso (em gramas). O algoritmo calculará o valor exato segundo a tabela do Japan Post (América do Sul).")
 
-num_figures = st.number_input("Quantos itens você vai enviar?", min_value=1, max_value=15, value=1)
+num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 
 itens_para_envio = []
 
