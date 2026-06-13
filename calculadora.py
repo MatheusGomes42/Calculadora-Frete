@@ -77,37 +77,84 @@ def empacotar_itens(itens, modalidade):
                 return f"❌ O item '{item['nome']}' excede os limites de comprimento, volume ou peso do {modalidade} mesmo sozinho!"
     return caixas
 
-# --- LÓGICA VISUAL (GRÁFICOS 3D) ---
+# --- LÓGICA VISUAL (GRÁFICOS 3D INTERATIVOS COM NOMES NOS 6 LADOS) ---
 def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
     fig = go.Figure()
     pos_x_atual = 0
-    cores = ['#FF9999', '#66B2FF', '#99FF99', '#FFCC99', '#FF99CC', '#E0E0E0', '#B266FF']
+    # Cores ligeiramente mais fortes para contrastar com a opacidade total
+    cores = ['#E74C3C', '#3498DB', '#2ECC71', '#F1C40F', '#9B59B6', '#95A5A6', '#FF8C00']
     
+    # Listas para acumular os pontos de texto (Rótulos)
+    text_coords_x = []
+    text_coords_y = []
+    text_coords_z = []
+    text_content = []
+
     for i, item in enumerate(caixa_itens):
         cor = cores[i % len(cores)]
         nome = item['nome']
         dx, dy, dz = item['x'], item['y'], item['z']
         
-        x = [pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx,
-             pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx]
-        y = [0, dy, dy, 0, 0, dy, dy, 0]
-        z = [0, 0, 0, 0, dz, dz, dz, dz]
+        # 1. Vértices do paralelepípedo
+        x_verts = [pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx,
+                   pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx]
+        y_verts = [0, dy, dy, 0, 0, dy, dy, 0]
+        z_verts = [0, 0, 0, 0, dz, dz, dz, dz]
         
+        # 2. Mapeamento das faces
         i_faces = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
         j_faces = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
         k_faces = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
         
+        # 3. Adiciona a geometria da figura (OPACA!)
         fig.add_trace(go.Mesh3d(
-            x=x, y=y, z=z,
+            x=x_verts, y=y_verts, z=z_verts,
             i=i_faces, j=j_faces, k=k_faces,
             color=cor,
-            opacity=0.9,
+            opacity=1.0, # 100% Opaco para não ver através
+            flatshading=True,
             name=nome,
-            hoverinfo='name',
-            flatshading=True
+            showlegend=True,
+            hoverinfo='name+x+y+z'
         ))
+
+        # 4. Calcula os centros das 6 faces para colocar o nome
+        x_m, y_m, z_m = pos_x_atual + dx/2, dy/2, dz/2
+        
+        face_centers = [
+            (x_m, y_m, dz),   # Topo (Cima)
+            (x_m, y_m, 0),    # Fundo (Baixo)
+            (x_m, 0, z_m),    # Frente
+            (x_m, dy, z_m),   # Trás
+            (pos_x_atual+dx, y_m, z_m), # Direita
+            (pos_x_atual, y_m, z_m)     # Esquerda
+        ]
+
+        # Acumula as coordenadas de texto para renderizar numa única trace mais eficiente
+        # O Plotly oculta o texto se a face estiver voltada para longe da câmera e a caixa for opaca
+        for fx, fy, fz in face_centers:
+            text_coords_x.append(fx)
+            text_coords_y.append(fy)
+            text_coords_z.append(fz)
+            text_content.append(nome)
+
         pos_x_atual += dx
 
+    # 5. Adiciona todos os nomes nas faces numa única trace de Scatter3d
+    fig.add_trace(go.Scatter3d(
+        x=text_coords_x,
+        y=text_coords_y,
+        z=text_coords_z,
+        mode='text',
+        text=text_content,
+        textposition="center center",
+        # Fonte menor e branca para caber melhor nas faces opacas e ter contraste
+        textfont=dict(family="Arial, sans-serif", size=10, color="white"),
+        hoverinfo='none', # O hover já está na Mesh3d
+        showlegend=False
+    ))
+
+    # 6. Adiciona a "Caixa" exterior pontilhada vermelha (Limites Gastos)
     x_ext = [0, x_caixa, x_caixa, 0, 0, 0, x_caixa, x_caixa, 0, 0, x_caixa, x_caixa, x_caixa, x_caixa, 0, 0]
     y_ext = [0, 0, y_caixa, y_caixa, 0, 0, 0, y_caixa, y_caixa, 0, 0, 0, y_caixa, y_caixa, y_caixa, y_caixa]
     z_ext = [0, 0, 0, 0, 0, z_caixa, z_caixa, z_caixa, z_caixa, z_caixa, z_caixa, 0, 0, z_caixa, z_caixa, 0]
@@ -116,20 +163,23 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
         x=x_ext, y=y_ext, z=z_ext,
         mode='lines',
         line=dict(color='red', width=4, dash='dash'),
-        name='Caixa Externa (Limites)',
+        name='Caixa Externa (Volumetria)',
         hoverinfo='none'
     ))
 
-    # FUNDO BRANCO E ESTILIZAÇÃO DO GRÁFICO
+    # Configuração estética final (Fundo Branco)
     fig.update_layout(
-        paper_bgcolor='white', # Fundo atrás do gráfico
+        paper_bgcolor='white',
         plot_bgcolor='white',
-        font=dict(color='black'), # Letras em preto para contrastar
+        font=dict(color='black'),
         scene=dict(
-            xaxis=dict(title='X (mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='lightgray'),
-            yaxis=dict(title='Y (mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='lightgray'),
-            zaxis=dict(title='Z (mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='lightgray'),
-            aspectmode='data'
+            xaxis=dict(title='X (Comprimento mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='gray', nticks=10),
+            yaxis=dict(title='Y (Largura mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='gray', nticks=5),
+            zaxis=dict(title='Z (Altura mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='gray', nticks=5),
+            aspectmode='data', # Mantém a proporção real
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.5) # Posicionamento padrão inicial da câmera
+            )
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         showlegend=True,
@@ -139,11 +189,11 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 st.set_page_config(page_title="Calculadora de Frete", page_icon="📦", layout="wide")
-st.title("📦 Calculadora de Envios Internacionais")
+st.title("📦 Calculadora de Envios Internacionais (Japão para Brasil)")
 
 st.warning("⚠️ **Aviso:** Se as medidas finais ficarem muito justas ao limite do frete, pode não ser possível o envio. Lembre-se de deixar uma margem de segurança para acomodar a própria espessura da caixa de papelão, plástico bolha e outros materiais de proteção.")
 
-st.write("Digite o nome, as dimensões (em mm) e o peso (em gramas). O algoritmo calculará o valor exato segundo a tabela do Japan Post (América do Sul).")
+st.write("Digite o nome, as dimensões (em mm) e o peso (em gramas). O algoritmo calculará o valor exato segundo a tabela do Japan Post (América do Sul). O gráfico 3D é interativo: arraste com o mouse para girar e ver os nomes nas faces.")
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 
@@ -164,6 +214,7 @@ for i in range(num_figures):
     with col4:
         peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
         
+    # Rotaciona automaticamente para alinhar o maior lado com o eixo X (Comprimento)
     dimensoes = sorted([m1, m2, m3], reverse=True)
     
     itens_para_envio.append({
@@ -190,9 +241,9 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
             st.success(f"Total de caixas necessárias: {len(resultado)}")
             
             for idx, caixa in enumerate(resultado):
-                nomes = [item['nome'] for item in caixa]
-                x, y, z, peso_caixa = calcular_dimensoes_e_peso(caixa)
-                volumetria = x + 2*(y+z) if mod != 'ePacket' else x+y+z
+                nomes_conteudo = [item['nome'] for item in caixa]
+                x_c, y_c, z_c, peso_caixa = calcular_dimensoes_e_peso(caixa)
+                volumetria = x_c + 2*(y_c+z_c) if mod != 'ePacket' else x_c+y_c+z_c
                 
                 valor_frete = estimar_frete_jpy(mod, peso_caixa)
                 
@@ -200,13 +251,15 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
                     custo_total_jpy += valor_frete
                     texto_frete = f"¥ {valor_frete:,.0f}"
                 else:
-                    texto_frete = "Erro no cálculo de peso"
+                    texto_frete = "Erro no cálculo de peso (excede tabela)"
                 
                 with st.expander(f"📦 Caixa {idx+1} ({len(caixa)} itens) | Peso: {peso_caixa}g | Frete Exato: {texto_frete}"):
-                    st.write(f"**Conteúdo:** {', '.join(nomes)}")
-                    st.write(f"**Dimensões Finais Estimadas:** X={x}mm, Y={y}mm, Z={z}mm | Volumetria: {volumetria}mm")
+                    st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
+                    st.write(f"**Dimensões Finais da Caixa:** X (Comprimento)={x_c}mm, Y (Largura)={y_c}mm, Z (Altura)={z_c}mm | Volumetria: {volumetria}mm")
                     
-                    figura_grafico = gerar_grafico_3d(caixa, x, y, z)
+                    # Renderiza o gráfico 3D interativo com nomes ocultos nas faces traseiras
+                    figura_grafico = gerar_grafico_3d(caixa, x_c, y_c, z_c)
+                    # Usamos uma key única para o Plotly para evitar erros de duplicidade
                     st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}")
             
             if custo_total_jpy > 0:
