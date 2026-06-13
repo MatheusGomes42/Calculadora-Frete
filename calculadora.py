@@ -6,12 +6,13 @@ import itertools
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
 def atende_limite(x, y, z, peso, modalidade):
+    # AGORA COM MARGENS DE SEGURANÇA AJUSTADAS PARA EVITAR SURPRESAS
     if modalidade == 'ePacket': 
-        return x <= 600 and (x + y + z) <= 900 and peso <= 2000
+        return x <= 600 and (x + y + z) <= 850 and peso <= 2000
     elif modalidade == 'Air Parcel': 
-        return x <= 1050 and (x + 2 * (y + z)) <= 2000 and peso <= 30000
+        return x <= 1050 and (x + 2 * (y + z)) <= 1900 and peso <= 30000
     elif modalidade == 'EMS': 
-        return x <= 1500 and (x + 2 * (y + z)) <= 3000 and peso <= 30000
+        return x <= 1500 and (x + 2 * (y + z)) <= 2800 and peso <= 30000
     return False
 
 def estimar_frete_jpy(modalidade, peso_g):
@@ -41,7 +42,6 @@ def check_overlap(pos, dim, placed_items):
     for p in placed_items:
         x2, y2, z2 = p['pos']
         dx2, dy2, dz2 = p['dim']
-        # Lógica de colisão 3D
         if not (x1 + dx1 <= x2 or x2 + dx2 <= x1 or
                 y1 + dy1 <= y2 or y2 + dy2 <= y1 or
                 z1 + dz1 <= z2 or z2 + dz2 <= z1):
@@ -50,23 +50,20 @@ def check_overlap(pos, dim, placed_items):
 
 def get_candidate_points(placed_items):
     if not placed_items: return [(0, 0, 0)]
-    # Gera uma malha 3D baseada nas quinas dos itens já colocados
     xs = [0] + [p['pos'][0] + p['dim'][0] for p in placed_items]
     ys = [0] + [p['pos'][1] + p['dim'][1] for p in placed_items]
     zs = [0] + [p['pos'][2] + p['dim'][2] for p in placed_items]
     pts = list(set(itertools.product(xs, ys, zs)))
-    # Ordena para tentar preencher primeiro o chão (Z=0), depois a lateral, depois o fundo
     pts.sort(key=lambda pt: (pt[2], pt[1], pt[0]))
     return pts
 
 def empacotar_itens_3d(itens, modalidade):
-    # Ordena do maior para o menor volume para facilitar o encaixe dos pequenos no final
     sorted_itens = sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True)
     caixas = [] 
     
     for item in sorted_itens:
         dim_originais = (item['x'], item['y'], item['z'])
-        rotacoes = list(set(itertools.permutations(dim_originais))) # Testa girar o item
+        rotacoes = list(set(itertools.permutations(dim_originais)))
         alocado = False
         
         for caixa in caixas:
@@ -83,11 +80,9 @@ def empacotar_itens_3d(itens, modalidade):
                         new_max_y = max([p['pos'][1] + p['dim'][1] for p in caixa['placed_items']] + [pt[1] + dim_rot[1]])
                         new_max_z = max([p['pos'][2] + p['dim'][2] for p in caixa['placed_items']] + [pt[2] + dim_rot[2]])
                         
-                        # O Japan Post avalia a caixa ordenando as medidas reais
                         bounds = sorted([new_max_x, new_max_y, new_max_z], reverse=True)
                         
                         if atende_limite(bounds[0], bounds[1], bounds[2], new_peso, modalidade):
-                            # Salva a melhor configuração que minimiza a caixa
                             vol_temp = bounds[0] + 2*(bounds[1]+bounds[2]) if modalidade != 'ePacket' else bounds[0]+bounds[1]+bounds[2]
                             if vol_temp < menor_vol_incremento:
                                 menor_vol_incremento = vol_temp
@@ -105,10 +100,8 @@ def empacotar_itens_3d(itens, modalidade):
                 break
                 
         if not alocado:
-            # Não coube nas caixas existentes, cria uma nova
             bounds = sorted(dim_originais, reverse=True)
             if atende_limite(bounds[0], bounds[1], bounds[2], item['peso'], modalidade):
-                # A melhor rotação inicial é a que alinha com a ordem (X maior, Y, Z)
                 dim_inicial = bounds 
                 caixas.append({
                     'placed_items': [{'item': item, 'pos': (0,0,0), 'dim': dim_inicial}],
@@ -117,7 +110,7 @@ def empacotar_itens_3d(itens, modalidade):
                     'peso': item['peso']
                 })
             else:
-                return f"❌ O item '{item['nome']}' excede os limites de {modalidade} mesmo sozinho!"
+                return f"❌ O item '{item['nome']}' excede as novas margens de segurança de {modalidade} mesmo sozinho!"
                 
     return caixas
 
@@ -178,7 +171,6 @@ def gerar_grafico_3d_novo(caixa_data):
         hoverinfo='none', showlegend=False
     ))
 
-    # Desenha a caixa limite final
     x_c, y_c, z_c = caixa_data['bound_x'], caixa_data['bound_y'], caixa_data['bound_z']
     x_ext = [0, x_c, x_c, 0, 0, 0, x_c, x_c, 0, 0, x_c, x_c, x_c, x_c, 0, 0]
     y_ext = [0, 0, y_c, y_c, 0, 0, 0, y_c, y_c, 0, 0, 0, y_c, y_c, y_c, y_c]
@@ -221,7 +213,8 @@ for i in range(num_figures):
     with col3: m3 = st.number_input("Med. 3 (mm)", min_value=1, value=150, key=f"m3_{i}")
     with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
         
-    itens_para_envio.append({'nome': nome_item, 'x': m1, 'y': m2, 'z': m3, 'peso': peso})
+    dimensoes = sorted([m1, m2, m3], reverse=True)
+    itens_para_envio.append({'nome': nome_item, 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': peso})
 
 st.divider()
 
