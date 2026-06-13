@@ -1,6 +1,5 @@
 import streamlit as st
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+import plotly.graph_objects as go
 import math
 
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
@@ -24,16 +23,11 @@ def atende_limite(x, y, z, peso, modalidade):
     return False
 
 def estimar_frete_jpy(modalidade, peso_g):
-    """
-    Algoritmo de escalonamento oficial do Japan Post (América do Sul - Zona 5).
-    Substitui tabelas estáticas por cálculo matemático de degraus via math.ceil.
-    """
     if peso_g == 0: return 0
         
     if modalidade == 'ePacket':
         if peso_g > 2000: return None
         if peso_g <= 100: return 920
-        # Sobe 260 ienes a cada 100g adicionais
         degraus = math.ceil((peso_g - 100) / 100)
         return 920 + (degraus * 260)
             
@@ -42,11 +36,9 @@ def estimar_frete_jpy(modalidade, peso_g):
         if peso_g <= 1000:
             return 4550
         elif peso_g <= 10000:
-            # Sobe 2700 ienes a cada 1kg
             kg_extra = math.ceil((peso_g - 1000) / 1000)
             return 4550 + (kg_extra * 2700)
         else:
-            # Acima de 10kg, sobe 1800 ienes a cada 1kg
             kg_extra = math.ceil((peso_g - 10000) / 1000)
             return 28850 + (kg_extra * 1800)
         
@@ -55,15 +47,12 @@ def estimar_frete_jpy(modalidade, peso_g):
         if peso_g <= 500:
             return 3600
         elif peso_g <= 2000:
-            # Sobe 300 ienes a cada 100g
             degraus = math.ceil((peso_g - 500) / 100)
             return 3600 + (degraus * 300)
         elif peso_g <= 6000:
-            # Sobe 1500 ienes a cada 500g
             degraus = math.ceil((peso_g - 2000) / 500)
             return 8100 + (degraus * 1500)
         else:
-            # Acima de 6kg, sobe 2400 ienes a cada 1kg
             degraus = math.ceil((peso_g - 6000) / 1000)
             return 20100 + (degraus * 2400)
         
@@ -87,51 +76,73 @@ def empacotar_itens(itens, modalidade):
                 return f"❌ O item '{item['nome']}' excede os limites de volume ou peso do {modalidade} mesmo sozinho!"
     return caixas
 
-# --- LÓGICA VISUAL (GRÁFICOS) ---
-def gerar_grafico_caixa(caixa_itens, x_caixa, y_caixa, z_caixa):
-    fig, (ax_top, ax_front, ax_side) = plt.subplots(1, 3, figsize=(12, 4))
+# --- LÓGICA VISUAL (GRÁFICOS 3D) ---
+def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
+    fig = go.Figure()
     pos_x_atual = 0
     cores = ['#FF9999', '#66B2FF', '#99FF99', '#FFCC99', '#FF99CC', '#E0E0E0', '#B266FF']
     
+    # Desenha cada item como um bloco 3D
     for i, item in enumerate(caixa_itens):
         cor = cores[i % len(cores)]
         nome = item['nome']
+        dx, dy, dz = item['x'], item['y'], item['z']
         
-        rect_top = patches.Rectangle((pos_x_atual, 0), item['x'], item['y'], linewidth=1, edgecolor='black', facecolor=cor, alpha=0.8)
-        ax_top.add_patch(rect_top)
-        ax_top.text(pos_x_atual + item['x']/2, item['y']/2, nome, ha='center', va='center', fontsize=8, rotation=90 if item['x'] < 40 else 0)
+        # 8 Vértices do paralelepípedo
+        x = [pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx,
+             pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx]
+        y = [0, dy, dy, 0, 0, dy, dy, 0]
+        z = [0, 0, 0, 0, dz, dz, dz, dz]
         
-        rect_front = patches.Rectangle((pos_x_atual, 0), item['x'], item['z'], linewidth=1, edgecolor='black', facecolor=cor, alpha=0.8)
-        ax_front.add_patch(rect_front)
-        ax_front.text(pos_x_atual + item['x']/2, item['z']/2, nome, ha='center', va='center', fontsize=8, rotation=90 if item['x'] < 40 else 0)
+        # Mapeamento dos triângulos que formam as 6 faces
+        i_faces = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
+        j_faces = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
+        k_faces = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
         
-        pos_x_atual += item['x']
-        
-    itens_ordenados_area = sorted(caixa_itens, key=lambda i: i['y']*i['z'], reverse=True)
-    for item in itens_ordenados_area:
-        cor = cores[caixa_itens.index(item) % len(cores)]
-        rect_side = patches.Rectangle((0, 0), item['y'], item['z'], linewidth=1, edgecolor='black', facecolor=cor, alpha=0.5)
-        ax_side.add_patch(rect_side)
-        ax_side.text(item['y']/2, item['z']/2, item['nome'], ha='center', va='center', fontsize=8)
+        fig.add_trace(go.Mesh3d(
+            x=x, y=y, z=z,
+            i=i_faces, j=j_faces, k=k_faces,
+            color=cor,
+            opacity=0.9,
+            name=nome,
+            hoverinfo='name',
+            flatshading=True
+        ))
+        pos_x_atual += dx
 
-    for ax, title, max_x, max_y in zip(
-        [ax_top, ax_front, ax_side], 
-        ['Top View (X-Y)', 'Front View (X-Z)', 'Side View (Y-Z)'],
-        [x_caixa, x_caixa, y_caixa],
-        [y_caixa, z_caixa, z_caixa]
-    ):
-        ax.set_title(title)
-        ax.set_xlim(0, max_x * 1.1)
-        ax.set_ylim(0, max_y * 1.1)
-        caixa_exterior = patches.Rectangle((0, 0), max_x, max_y, linewidth=2, edgecolor='red', facecolor='none', linestyle='--')
-        ax.add_patch(caixa_exterior)
+    # Desenha a "Caixa" exterior com linhas tracejadas vermelhas
+    x_ext = [0, x_caixa, x_caixa, 0, 0, 0, x_caixa, x_caixa, 0, 0, x_caixa, x_caixa, x_caixa, x_caixa, 0, 0]
+    y_ext = [0, 0, y_caixa, y_caixa, 0, 0, 0, y_caixa, y_caixa, 0, 0, 0, y_caixa, y_caixa, y_caixa, y_caixa]
+    z_ext = [0, 0, 0, 0, 0, z_caixa, z_caixa, z_caixa, z_caixa, z_caixa, z_caixa, 0, 0, z_caixa, z_caixa, 0]
+    
+    fig.add_trace(go.Scatter3d(
+        x=x_ext, y=y_ext, z=z_ext,
+        mode='lines',
+        line=dict(color='red', width=4, dash='dash'),
+        name='Caixa Externa (Limites)',
+        hoverinfo='none'
+    ))
 
-    plt.tight_layout()
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(title='X (mm)'),
+            yaxis=dict(title='Y (mm)'),
+            zaxis=dict(title='Z (mm)'),
+            aspectmode='data' # Isso é fundamental para a caixa não parecer distorcida!
+        ),
+        margin=dict(l=0, r=0, b=0, t=30),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     return fig
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 st.set_page_config(page_title="Calculadora de Frete", page_icon="📦", layout="wide")
 st.title("📦 Calculadora de Envios Internacionais")
+
+# AVISO ADICIONADO AQUI!
+st.warning("⚠️ **Aviso:** Se as medidas finais ficarem muito justas ao limite do frete, pode não ser possível o envio. Lembre-se de deixar uma margem de segurança para acomodar a própria espessura da caixa de papelão, plástico bolha e outros materiais de proteção.")
+
 st.write("Digite o nome, as dimensões (em mm) e o peso (em gramas). O algoritmo calculará o valor exato segundo a tabela do Japan Post (América do Sul).")
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
@@ -193,10 +204,11 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
                 
                 with st.expander(f"📦 Caixa {idx+1} ({len(caixa)} itens) | Peso: {peso_caixa}g | Frete Exato: {texto_frete}"):
                     st.write(f"**Conteúdo:** {', '.join(nomes)}")
-                    st.write(f"**Dimensões da Caixa:** X={x}mm, Y={y}mm, Z={z}mm | Volumetria: {volumetria}mm")
+                    st.write(f"**Dimensões Finais Estimadas:** X={x}mm, Y={y}mm, Z={z}mm | Volumetria: {volumetria}mm")
                     
-                    figura_grafico = gerar_grafico_caixa(caixa, x, y, z)
-                    st.pyplot(figura_grafico)
+                    # Renderiza o novo gráfico 3D interativo!
+                    figura_grafico = gerar_grafico_3d(caixa, x, y, z)
+                    st.plotly_chart(figura_grafico, use_container_width=True)
             
             if custo_total_jpy > 0:
                 st.info(f"**Custo Total Estimado ({mod}): ¥ {custo_total_jpy:,.0f}**")
