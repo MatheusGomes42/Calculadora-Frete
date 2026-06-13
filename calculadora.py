@@ -14,12 +14,13 @@ def calcular_dimensoes_e_peso(itens):
     return x_total, y_max, z_max, peso_total
 
 def atende_limite(x, y, z, peso, modalidade):
+    # AGORA COM LIMITES ABSOLUTOS DE COMPRIMENTO (EIXO X)
     if modalidade == 'ePacket': 
-        return (x + y + z) <= 900 and peso <= 2000
+        return x <= 600 and (x + y + z) <= 900 and peso <= 2000
     elif modalidade == 'Air Parcel': 
-        return (x + 2 * (y + z)) <= 2000 and peso <= 30000
+        return x <= 1050 and (x + 2 * (y + z)) <= 2000 and peso <= 30000
     elif modalidade == 'EMS': 
-        return (x + 2 * (y + z)) <= 3000 and peso <= 30000
+        return x <= 1500 and (x + 2 * (y + z)) <= 3000 and peso <= 30000
     return False
 
 def estimar_frete_jpy(modalidade, peso_g):
@@ -73,7 +74,7 @@ def empacotar_itens(itens, modalidade):
             if atende_limite(item['x'], item['y'], item['z'], item['peso'], modalidade):
                 caixas.append([item])
             else:
-                return f"❌ O item '{item['nome']}' excede os limites de volume ou peso do {modalidade} mesmo sozinho!"
+                return f"❌ O item '{item['nome']}' excede os limites de comprimento, volume ou peso do {modalidade} mesmo sozinho!"
     return caixas
 
 # --- LÓGICA VISUAL (GRÁFICOS 3D) ---
@@ -82,19 +83,16 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
     pos_x_atual = 0
     cores = ['#FF9999', '#66B2FF', '#99FF99', '#FFCC99', '#FF99CC', '#E0E0E0', '#B266FF']
     
-    # Desenha cada item como um bloco 3D
     for i, item in enumerate(caixa_itens):
         cor = cores[i % len(cores)]
         nome = item['nome']
         dx, dy, dz = item['x'], item['y'], item['z']
         
-        # 8 Vértices do paralelepípedo
         x = [pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx,
              pos_x_atual, pos_x_atual, pos_x_atual+dx, pos_x_atual+dx]
         y = [0, dy, dy, 0, 0, dy, dy, 0]
         z = [0, 0, 0, 0, dz, dz, dz, dz]
         
-        # Mapeamento dos triângulos que formam as 6 faces
         i_faces = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
         j_faces = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
         k_faces = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
@@ -110,7 +108,6 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
         ))
         pos_x_atual += dx
 
-    # Desenha a "Caixa" exterior com linhas tracejadas vermelhas
     x_ext = [0, x_caixa, x_caixa, 0, 0, 0, x_caixa, x_caixa, 0, 0, x_caixa, x_caixa, x_caixa, x_caixa, 0, 0]
     y_ext = [0, 0, y_caixa, y_caixa, 0, 0, 0, y_caixa, y_caixa, 0, 0, 0, y_caixa, y_caixa, y_caixa, y_caixa]
     z_ext = [0, 0, 0, 0, 0, z_caixa, z_caixa, z_caixa, z_caixa, z_caixa, z_caixa, 0, 0, z_caixa, z_caixa, 0]
@@ -123,12 +120,16 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
         hoverinfo='none'
     ))
 
+    # FUNDO BRANCO E ESTILIZAÇÃO DO GRÁFICO
     fig.update_layout(
+        paper_bgcolor='white', # Fundo atrás do gráfico
+        plot_bgcolor='white',
+        font=dict(color='black'), # Letras em preto para contrastar
         scene=dict(
-            xaxis=dict(title='X (mm)'),
-            yaxis=dict(title='Y (mm)'),
-            zaxis=dict(title='Z (mm)'),
-            aspectmode='data' # Isso é fundamental para a caixa não parecer distorcida!
+            xaxis=dict(title='X (mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='lightgray'),
+            yaxis=dict(title='Y (mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='lightgray'),
+            zaxis=dict(title='Z (mm)', backgroundcolor='white', gridcolor='lightgray', showbackground=True, zerolinecolor='lightgray'),
+            aspectmode='data'
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         showlegend=True,
@@ -140,7 +141,6 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
 st.set_page_config(page_title="Calculadora de Frete", page_icon="📦", layout="wide")
 st.title("📦 Calculadora de Envios Internacionais")
 
-# AVISO ADICIONADO AQUI!
 st.warning("⚠️ **Aviso:** Se as medidas finais ficarem muito justas ao limite do frete, pode não ser possível o envio. Lembre-se de deixar uma margem de segurança para acomodar a própria espessura da caixa de papelão, plástico bolha e outros materiais de proteção.")
 
 st.write("Digite o nome, as dimensões (em mm) e o peso (em gramas). O algoritmo calculará o valor exato segundo a tabela do Japan Post (América do Sul).")
@@ -206,7 +206,6 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
                     st.write(f"**Conteúdo:** {', '.join(nomes)}")
                     st.write(f"**Dimensões Finais Estimadas:** X={x}mm, Y={y}mm, Z={z}mm | Volumetria: {volumetria}mm")
                     
-                    # Renderiza o novo gráfico 3D interativo!
                     figura_grafico = gerar_grafico_3d(caixa, x, y, z)
                     st.plotly_chart(figura_grafico, use_container_width=True)
             
