@@ -112,15 +112,17 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
             hoverinfo='name+x+y+z'
         ))
 
+        # O SEGREDO ESTÁ AQUI: Desvio de 3mm para tirar o texto de dentro da parede
+        offset = 3 
         x_m, y_m, z_m = pos_x_atual + dx/2, dy/2, dz/2
         
         face_centers = [
-            (x_m, y_m, dz),
-            (x_m, y_m, 0),
-            (x_m, 0, z_m),
-            (x_m, dy, z_m),
-            (pos_x_atual+dx, y_m, z_m),
-            (pos_x_atual, y_m, z_m)
+            (x_m, y_m, dz + offset),               # Topo (empurrado para cima)
+            (x_m, y_m, -offset),                   # Fundo (empurrado para baixo)
+            (x_m, -offset, z_m),                   # Frente (empurrado para frente)
+            (x_m, dy + offset, z_m),               # Trás (empurrado para trás)
+            (pos_x_atual + dx + offset, y_m, z_m), # Direita (empurrado para direita)
+            (pos_x_atual - offset, y_m, z_m)       # Esquerda (empurrado para esquerda)
         ]
 
         for fx, fy, fz in face_centers:
@@ -137,8 +139,9 @@ def gerar_grafico_3d(caixa_itens, x_caixa, y_caixa, z_caixa):
         z=text_coords_z,
         mode='text',
         text=text_content,
-        textposition="middle center", # <-- CORREÇÃO APLICADA AQUI
-        textfont=dict(family="Arial, sans-serif", size=10, color="white"),
+        textposition="middle center",
+        # Alterei para preto e coloquei negrito para garantir contraste e leitura 100% nítida
+        textfont=dict(family="Arial, sans-serif", size=12, color="black"),
         hoverinfo='none',
         showlegend=False
     ))
