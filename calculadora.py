@@ -207,7 +207,7 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
                     st.write(f"**Dimensões Finais Estimadas:** X={x}mm, Y={y}mm, Z={z}mm | Volumetria: {volumetria}mm")
                     
                     figura_grafico = gerar_grafico_3d(caixa, x, y, z)
-                    st.plotly_chart(figura_grafico, use_container_width=True)
+                    st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}")
             
             if custo_total_jpy > 0:
                 st.info(f"**Custo Total Estimado ({mod}): ¥ {custo_total_jpy:,.0f}**")
