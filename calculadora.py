@@ -12,7 +12,7 @@ def atende_limite(x, y, z, peso, modalidade):
     elif modalidade == 'Air Parcel': 
         return x <= 1050 and (x + 2 * (y + z)) <= 1900 and peso <= 30000
     elif modalidade == 'EMS': 
-        return x <= 1500 and (x + 2 * (y + z)) <= 2800 and peso <= 30000
+        return x <= 1500 and (x + 2 * (y + z)) <= 2900 and peso <= 30000
     return False
 
 def estimar_frete_jpy(modalidade, peso_g):
