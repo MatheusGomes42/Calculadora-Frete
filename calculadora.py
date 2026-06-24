@@ -227,7 +227,7 @@ limite_air = st.sidebar.number_input("Seu Limite Air Parcel (mm)", min_value=500
 limite_ems = st.sidebar.number_input("Seu Limite EMS (mm)", min_value=500, max_value=2950, value=2800, step=50,
                                      help="Limite postal máximo absoluto: 2950mm")
 
-st.warning("⚠️ **Nota de Simulação:** O sistema adiciona automaticamente +200mm em cada lado do item inserido para prever a camada de plástico bolha de segurança.")
+st.warning("⚠️ **Nota de Simulação:** O sistema adiciona automaticamente +20mm (2cm) em cada lado do item inserido para prever a camada de plástico bolha de segurança.")
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 itens_para_envio = []
@@ -236,13 +236,13 @@ for i in range(num_figures):
     st.markdown(f"**Item {i+1}**")
     col0, col1, col2, col3, col4 = st.columns([2, 1, 1, 1, 1]) 
     with col0: nome_item = st.text_input("Nome", value=f"Figure {i+1}", key=f"nome_{i}")
-    with col1: m1 = st.number_input("Med. 1 Original (mm)", min_value=1, value=150, key=f"m1_{i}")
-    with col2: m2 = st.number_input("Med. 2 Original (mm)", min_value=1, value=100, key=f"m2_{i}")
-    with col3: m3 = st.number_input("Med. 3 Original (mm)", min_value=1, value=80, key=f"m3_{i}")
-    with col4: peso = st.number_input("Peso (g)", min_value=1, value=500, key=f"peso_{i}")
+    with col1: m1 = st.number_input("Med. 1 Original (mm)", min_value=1, value=300, key=f"m1_{i}")
+    with col2: m2 = st.number_input("Med. 2 Original (mm)", min_value=1, value=200, key=f"m2_{i}")
+    with col3: m3 = st.number_input("Med. 3 Original (mm)", min_value=1, value=150, key=f"m3_{i}")
+    with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
         
-    # ADICIONA +200mm EM CADA DIMENSÃO PARA SIMULAR O PLÁSTICO BOLHA / CAIXA DO PRODUTO
-    dimensoes_com_bolha = sorted([m1 + 200, m2 + 200, m3 + 200], reverse=True)
+    # ADICIONA +20mm EM CADA DIMENSÃO PARA SIMULAR O PLÁSTICO BOLHA / CAIXA DO PRODUTO
+    dimensoes_com_bolha = sorted([m1 + 20, m2 + 20, m3 + 20], reverse=True)
     
     itens_para_envio.append({
         'nome': nome_item, 
