@@ -5,14 +5,26 @@ import itertools
 
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
-def atende_limite(x, y, z, peso, modalidade):
-    # AGORA COM MARGENS DE SEGURANÇA AJUSTADAS PARA EVITAR SURPRESAS
+def atende_limite(x, y, z, peso, modalidade, limite_custom_air, limite_custom_ems):
+    # Considera os 50mm (5cm) que a própria caixa ocupa na volumetria total
+    folga_caixa = 50 
+    
     if modalidade == 'ePacket': 
-        return x <= 600 and (x + y + z) <= 850 and peso <= 2000
+        volumetria = x + y + z + folga_caixa
+        return x <= 600 and volumetria <= 850 and peso <= 2000
+        
     elif modalidade == 'Air Parcel': 
-        return x <= 1050 and (x + 2 * (y + z)) <= 1900 and peso <= 30000
+        volumetria = x + 2 * (y + z) + folga_caixa
+        # Garante que não ultrapasse o limite customizado pelo usuário E nem o limite físico de 1950mm
+        limite_efetivo = min(limite_custom_air, 1950)
+        return x <= 1050 and volumetria <= limite_efetivo and peso <= 30000
+        
     elif modalidade == 'EMS': 
-        return x <= 1500 and (x + 2 * (y + z)) <= 2900 and peso <= 30000
+        volumetria = x + 2 * (y + z) + folga_caixa
+        # Garante que não ultrapasse o limite customizado pelo usuário E nem o limite físico de 2950mm
+        limite_efetivo = min(limite_custom_ems, 2950)
+        return x <= 1500 and volumetria <= limite_efetivo and peso <= 30000
+        
     return False
 
 def estimar_frete_jpy(modalidade, peso_g):
@@ -57,7 +69,7 @@ def get_candidate_points(placed_items):
     pts.sort(key=lambda pt: (pt[2], pt[1], pt[0]))
     return pts
 
-def empacotar_itens_3d(itens, modalidade):
+def empacotar_itens_3d(itens, modalidade, limite_air, limite_ems):
     sorted_itens = sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True)
     caixas = [] 
     
@@ -82,7 +94,7 @@ def empacotar_itens_3d(itens, modalidade):
                         
                         bounds = sorted([new_max_x, new_max_y, new_max_z], reverse=True)
                         
-                        if atende_limite(bounds[0], bounds[1], bounds[2], new_peso, modalidade):
+                        if atende_limite(bounds[0], bounds[1], bounds[2], new_peso, modalidade, limite_air, limite_ems):
                             vol_temp = bounds[0] + 2*(bounds[1]+bounds[2]) if modalidade != 'ePacket' else bounds[0]+bounds[1]+bounds[2]
                             if vol_temp < menor_vol_incremento:
                                 menor_vol_incremento = vol_temp
@@ -101,7 +113,7 @@ def empacotar_itens_3d(itens, modalidade):
                 
         if not alocado:
             bounds = sorted(dim_originais, reverse=True)
-            if atende_limite(bounds[0], bounds[1], bounds[2], item['peso'], modalidade):
+            if atende_limite(bounds[0], bounds[1], bounds[2], item['peso'], modalidade, limite_air, limite_ems):
                 dim_inicial = bounds 
                 caixas.append({
                     'placed_items': [{'item': item, 'pos': (0,0,0), 'dim': dim_inicial}],
@@ -110,7 +122,7 @@ def empacotar_itens_3d(itens, modalidade):
                     'peso': item['peso']
                 })
             else:
-                return f"❌ O item '{item['nome']}' excede as novas margens de segurança de {modalidade} mesmo sozinho!"
+                return f"❌ O item '{item['nome']}' (com plástico bolha) excede os limites configurados para {modalidade} mesmo sozinho!"
                 
     return caixas
 
@@ -197,9 +209,25 @@ def gerar_grafico_3d_novo(caixa_data):
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete", page_icon="📦", layout="wide")
-st.title("📦 Calculadora de Envios Internacionais (Japão para Brasil)")
-st.warning("⚠️ **Aviso:** Se as medidas finais ficarem muito justas ao limite do frete, pode não ser possível o envio. Deixe uma margem para plástico bolha e papelão.")
+st.set_page_config(page_title="Calculadora de Frete v2", page_icon="📦", layout="wide")
+st.title("📦 Calculadora de Envios Internacionais Dinâmica (Japão ➔ Brasil)")
+
+# --- BARRA LATERAL PARA SELEÇÃO DE VOLUMETRIA CUSTOMIZADA ---
+st.sidebar.header("⚙️ Configurações de Limite")
+st.sidebar.markdown("Defina a volumetria limite desejada para o empacotamento:")
+
+# ePacket possui limite rígido internacional de 850mm
+st.sidebar.number_input("Limite ePacket (Rígido - mm)", value=850, disabled=True, help="O limite do ePacket não pode ser alterado por regras postais.")
+
+# Air Parcel: Usuário escolhe, padrão 1800mm, limite máximo postal de 1950mm
+limite_air = st.sidebar.number_input("Seu Limite Air Parcel (mm)", min_value=500, max_value=1950, value=1800, step=50,
+                                     help="Limite postal máximo absoluto: 1950mm")
+
+# EMS: Usuário escolhe, padrão 2800mm, limite máximo postal de 2950mm
+limite_ems = st.sidebar.number_input("Seu Limite EMS (mm)", min_value=500, max_value=2950, value=2800, step=50,
+                                     help="Limite postal máximo absoluto: 2950mm")
+
+st.warning("⚠️ **Nota de Simulação:** O sistema adiciona automaticamente +200mm em cada lado do item inserido para prever a camada de plástico bolha de segurança.")
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 itens_para_envio = []
@@ -208,13 +236,21 @@ for i in range(num_figures):
     st.markdown(f"**Item {i+1}**")
     col0, col1, col2, col3, col4 = st.columns([2, 1, 1, 1, 1]) 
     with col0: nome_item = st.text_input("Nome", value=f"Figure {i+1}", key=f"nome_{i}")
-    with col1: m1 = st.number_input("Med. 1 (mm)", min_value=1, value=300, key=f"m1_{i}")
-    with col2: m2 = st.number_input("Med. 2 (mm)", min_value=1, value=200, key=f"m2_{i}")
-    with col3: m3 = st.number_input("Med. 3 (mm)", min_value=1, value=150, key=f"m3_{i}")
-    with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
+    with col1: m1 = st.number_input("Med. 1 Original (mm)", min_value=1, value=150, key=f"m1_{i}")
+    with col2: m2 = st.number_input("Med. 2 Original (mm)", min_value=1, value=100, key=f"m2_{i}")
+    with col3: m3 = st.number_input("Med. 3 Original (mm)", min_value=1, value=80, key=f"m3_{i}")
+    with col4: peso = st.number_input("Peso (g)", min_value=1, value=500, key=f"peso_{i}")
         
-    dimensoes = sorted([m1, m2, m3], reverse=True)
-    itens_para_envio.append({'nome': nome_item, 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': peso})
+    # ADICIONA +200mm EM CADA DIMENSÃO PARA SIMULAR O PLÁSTICO BOLHA / CAIXA DO PRODUTO
+    dimensoes_com_bolha = sorted([m1 + 200, m2 + 200, m3 + 200], reverse=True)
+    
+    itens_para_envio.append({
+        'nome': nome_item, 
+        'x': dimensoes_com_bolha[0], 
+        'y': dimensoes_com_bolha[1], 
+        'z': dimensoes_com_bolha[2], 
+        'peso': peso
+    })
 
 st.divider()
 
@@ -222,7 +258,9 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
     modalidades = ['ePacket', 'Air Parcel', 'EMS']
     for mod in modalidades:
         st.subheader(f"✈️ Frete: {mod}")
-        resultado = empacotar_itens_3d(itens_para_envio, mod)
+        
+        # Executa o cálculo passando os limites customizados escolhidos na Sidebar
+        resultado = empacotar_itens_3d(itens_para_envio, mod, limite_air, limite_ems)
         
         if isinstance(resultado, str):
             st.error(resultado)
@@ -232,7 +270,10 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
             
             for idx, caixa in enumerate(resultado):
                 nomes_conteudo = [p['item']['nome'] for p in caixa['placed_items']]
-                volumetria = caixa['x'] + 2*(caixa['y']+caixa['z']) if mod != 'ePacket' else caixa['x']+caixa['y']+caixa['z']
+                
+                # Cálculo da volumetria acrescida de 50mm (5cm) devido às paredes da caixa final
+                folga_caixa = 50
+                volumetria = caixa['x'] + 2*(caixa['y']+caixa['z']) + folga_caixa if mod != 'ePacket' else caixa['x']+caixa['y']+caixa['z'] + folga_caixa
                 valor_frete = estimar_frete_jpy(mod, caixa['peso'])
                 
                 if valor_frete:
@@ -243,7 +284,8 @@ if st.button("Calcular Empacotamento e Custos", type="primary", use_container_wi
                 
                 with st.expander(f"📦 Caixa {idx+1} ({len(caixa['placed_items'])} itens) | Peso: {caixa['peso']}g | Frete Exato: {texto_frete}"):
                     st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
-                    st.write(f"**Dimensões Finais da Caixa:** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm | Volumetria: {volumetria}mm")
+                    st.write(f"**Dimensões Calculadas (com Plástico Bolha):** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
+                    st.write(f"**Volumetria Final (+5cm da Caixa):** {volumetria}mm")
                     
                     figura_grafico = gerar_grafico_3d_novo(caixa)
                     st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}")
