@@ -7,22 +7,18 @@ import random
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
 def atende_limite(x, y, z, peso, modalidade, limite_custom_air, limite_custom_ems, limite_custom_epacket):
-    # As variáveis x, y, z aqui já incluem a caixa e a proteção.
     if modalidade == 'ePacket': 
         volumetria = x + y + z
-        # Limite absoluto postal é 900
         limite_efetivo = min(limite_custom_epacket, 900)
         return x <= 600 and volumetria <= limite_efetivo and peso <= 2000
         
     elif modalidade == 'Air Parcel': 
         volumetria = x + 2 * (y + z)
-        # Limite absoluto postal é 2000
         limite_efetivo = min(limite_custom_air, 2000)
         return x <= 1050 and volumetria <= limite_efetivo and peso <= 30000
         
     elif modalidade == 'EMS': 
         volumetria = x + 2 * (y + z)
-        # Limite absoluto postal é 3000
         limite_efetivo = min(limite_custom_ems, 3000)
         return x <= 1500 and volumetria <= limite_efetivo and peso <= 30000
         
@@ -70,13 +66,12 @@ def get_candidate_points(placed_items):
     pts.sort(key=lambda pt: (pt[2], pt[1], pt[0]))
     return pts
 
-def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx):
+def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, esp_cx, peso_cx):
     caixas = [] 
     rejeitados = []
     
+    # esp_cx é a grossura do papelão da caixa externa
     extra_dim = (2 * esp_cx)
-    if tipo_prot == 'Conjunta':
-        extra_dim += (2 * esp_prot)
         
     for item in itens_ordenados:
         dim_originais = (item['x'], item['y'], item['z'])
@@ -121,7 +116,8 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
             bounds = sorted([dim_originais[0] + extra_dim, dim_originais[1] + extra_dim, dim_originais[2] + extra_dim], reverse=True)
             new_peso_total = item['peso'] + peso_cx
             
-            if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
+            # Checa se cabe (usado para caixas normais e sub-agrupamentos)
+            if modalidade == 'IGNORE_LIMITS' or atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
                 caixas.append({
                     'placed_items': [{'item': item, 'pos': (0,0,0), 'dim': dim_originais}],
                     'bound_x': dim_originais[0], 'bound_y': dim_originais[1], 'bound_z': dim_originais[2],
@@ -134,15 +130,14 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                 
     return {'caixas': caixas, 'rejeitados': rejeitados}
 
-def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx):
+def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, esp_cx, peso_cx):
     heuristics = [
         sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
         sorted(itens, key=lambda i: i['peso'], reverse=True),
-        sorted(itens, key=lambda i: i['peso']/(i['x']*i['y']*i['z'] + 1), reverse=True),
     ]
     
     random.seed(42)
-    for _ in range(5):
+    for _ in range(3):
         shuffled = itens[:]
         random.shuffle(shuffled)
         heuristics.append(shuffled)
@@ -152,7 +147,7 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
     best_error = "Nenhum item atende aos requisitos desta modalidade."
     
     for heur_itens in heuristics:
-        result = run_packing(heur_itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx)
+        result = run_packing(heur_itens, modalidade, limite_air, limite_ems, limite_epacket, esp_cx, peso_cx)
         
         cost = 0
         valid = True
@@ -249,89 +244,107 @@ def gerar_grafico_3d_novo(caixa_data):
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v3.2", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v4.5", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
-st.sidebar.header("🛠️ Configurações da Caixa")
+st.sidebar.header("🛠️ Configurações da Caixa Externa")
 
-peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50, help="Será somado ao peso final dos itens.")
-espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1, help="Espessura da parede da caixa.")
+peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50)
+espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1)
 
-# CÁLCULO DA TRAVA DINÂMICA DE VOLUMETRIA (Matemática exata do papelão)
-overhead_epacket = espessura_caixa * 6   # X + Y + Z (2 paredes cada)
-overhead_parcel = espessura_caixa * 10   # X + 2Y + 2Z (Ganha peso duplo nas contas laterais)
-
+overhead_epacket = espessura_caixa * 6
+overhead_parcel = espessura_caixa * 10
 max_ui_epacket = 900 - overhead_epacket
 max_ui_air = 2000 - overhead_parcel
 max_ui_ems = 3000 - overhead_parcel
 
 st.sidebar.divider()
-st.sidebar.header("🫧 Plástico Bolha e Proteção")
-espessura_protecao = st.sidebar.slider("Espessura da Proteção (mm)", 0, 50, 10, 5, help="Camada de plástico bolha/jornal.")
-tipo_protecao = st.sidebar.radio("Como aplicar a proteção?", 
-    ["Individual (por item)", "Conjunta (na caixa inteira)"],
-    help="Individual envolve cada figure (bom se tiverem caixas separadas). Conjunta envolve todas juntas se estiverem coladas."
-)
+st.sidebar.header("🫧 Espessura da Proteção")
+espessura_protecao = st.sidebar.slider("Plástico Bolha (mm)", 0, 50, 10, 1, help="Esta espessura será aplicada de acordo com o agrupamento que você escolher no cadastro de cada item.")
 
 st.sidebar.divider()
 st.sidebar.header("📏 Limites Volumétricos Úteis")
-st.sidebar.markdown("*(Trava automática para evitar criar caixas que os Correios recusem)*")
 
 limite_epacket_interno = st.sidebar.number_input(
-    "Limite Útil ePacket (mm)", 
-    min_value=500, max_value=max_ui_epacket, 
-    value=min(850, max_ui_epacket), step=10, 
-    help=f"Máximo de 900mm - {overhead_epacket}mm de papelão = {max_ui_epacket}mm"
-)
-
+    "Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=min(850, max_ui_epacket), step=10)
 limite_air_interno = st.sidebar.number_input(
-    "Limite Útil Air Parcel (mm)", 
-    min_value=500, max_value=max_ui_air, 
-    value=min(1800, max_ui_air), step=50,
-    help=f"Máximo de 2000mm - {overhead_parcel}mm de papelão = {max_ui_air}mm"
-)
-
+    "Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
 limite_ems_interno = st.sidebar.number_input(
-    "Limite Útil EMS (mm)", 
-    min_value=500, max_value=max_ui_ems, 
-    value=min(2800, max_ui_ems), step=50,
-    help=f"Máximo de 3000mm - {overhead_parcel}mm de papelão = {max_ui_ems}mm"
-)
+    "Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
+
+
+st.write("---")
+st.subheader("📝 Itens para Envio (Pré-Agrupamento Inteligente)")
+st.write("Selecione **'Agrupar Juntas'** para as figures que você quer colar e passar plástico bolha como se fossem um tijolo só. O sistema unirá elas antes de colocar na caixa.")
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
-itens_para_envio = []
-
-st.write(f"*(Dica: Se a proteção for **Individual**, ela será somada automaticamente abaixo)*")
+itens_individuais = []
+itens_para_agrupar = []
 
 for i in range(num_figures):
-    col0, col1, col2, col3, col4 = st.columns([2, 1, 1, 1, 1]) 
-    with col0: nome_item = st.text_input(f"Item {i+1}", value=f"Figure {i+1}", key=f"nome_{i}")
-    with col1: m1 = st.number_input("Med. 1 (mm)", min_value=1, value=300, key=f"m1_{i}")
-    with col2: m2 = st.number_input("Med. 2 (mm)", min_value=1, value=200, key=f"m2_{i}")
-    with col3: m3 = st.number_input("Med. 3 (mm)", min_value=1, value=150, key=f"m3_{i}")
-    with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
-        
-    if tipo_protecao == "Individual (por item)":
-        dimensoes = sorted([m1 + (2*espessura_protecao), m2 + (2*espessura_protecao), m3 + (2*espessura_protecao)], reverse=True)
-    else:
-        dimensoes = sorted([m1, m2, m3], reverse=True)
+    col0, col1, col2, col3, col4, col5 = st.columns([1.5, 0.8, 0.8, 0.8, 0.8, 1.5]) 
     
-    itens_para_envio.append({
-        'nome': nome_item, 
-        'x': dimensoes[0], 
-        'y': dimensoes[1], 
-        'z': dimensoes[2], 
-        'peso': peso
-    })
+    with col0: nome_item = st.text_input(f"Item {i+1}", value=f"Figure {i+1}", key=f"nome_{i}")
+    with col1: m1 = st.number_input("M1 (mm)", min_value=1, value=300, key=f"m1_{i}")
+    with col2: m2 = st.number_input("M2 (mm)", min_value=1, value=200, key=f"m2_{i}")
+    with col3: m3 = st.number_input("M3 (mm)", min_value=1, value=150, key=f"m3_{i}")
+    with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
+    with col5: 
+        # AQUI ESTÁ A MÁGICA DE UX QUE VOCÊ PEDIU!
+        st.write("Tipo de Proteção")
+        tipo_prot = st.radio("Proteção", ["Individual", "Agrupar Juntas"], horizontal=True, label_visibility="collapsed", key=f"prot_{i}")
+        
+    if tipo_prot == "Individual":
+        # Se for individual, ela ganha a própria camada de plástico bolha dela imediatamente
+        dimensoes = sorted([m1 + (2*espessura_protecao), m2 + (2*espessura_protecao), m3 + (2*espessura_protecao)], reverse=True)
+        itens_individuais.append({'nome': nome_item, 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': peso})
+    else:
+        # Se for pra agrupar, pegamos as medidas "secas". O plástico bolha será passado nelas juntas depois!
+        dimensoes = sorted([m1, m2, m3], reverse=True)
+        itens_para_agrupar.append({'nome': nome_item, 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': peso})
 
 st.divider()
 
 if st.button("Calcular Empacotamento Inteligente", type="primary", use_container_width=True):
-    modalidades = ['ePacket', 'Air Parcel', 'EMS']
-    tipo_prot_str = "Individual" if "Individual" in tipo_protecao else "Conjunta"
     
-    # Adicionando o papelão de volta ao "Limite Útil" do usuário para o sistema criar a caixa real corretamente
+    # -------------------------------------------------------------
+    # PASSO 1: PRÉ-EMPACOTAMENTO (CRIAR O MACRO BLOCO COM AS AGRUPADAS)
+    # -------------------------------------------------------------
+    lista_final_de_itens = itens_individuais.copy()
+    
+    if len(itens_para_agrupar) > 0:
+        # Roda o Tetris só para as agrupadas, sem plástico bolha, sem papelão e sem limite de tamanho (IGNORE_LIMITS)
+        # O objetivo é só descobrir qual é o menor tijolo que elas formam juntas.
+        resultado_agrupamento = run_packing(
+            sorted(itens_para_agrupar, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
+            'IGNORE_LIMITS', 99999, 99999, 99999, 0, 0
+        )
+        
+        # Pega a "sub-caixa" gerada que uniu elas
+        bloco_agrupado = resultado_agrupamento['caixas'][0] 
+        nomes_agrupados = " + ".join([i['nome'] for i in itens_para_agrupar])
+        
+        # Agora sim! Aplicamos a espessura do plástico bolha no tijolo inteiro!
+        macro_x = bloco_agrupado['bound_x'] + (2 * espessura_protecao)
+        macro_y = bloco_agrupado['bound_y'] + (2 * espessura_protecao)
+        macro_z = bloco_agrupado['bound_z'] + (2 * espessura_protecao)
+        
+        # Salva como um item único, gigantesco e protegido
+        lista_final_de_itens.append({
+            'nome': f"📦 GRUPO ({nomes_agrupados})",
+            'x': macro_x,
+            'y': macro_y,
+            'z': macro_z,
+            'peso': bloco_agrupado['peso_itens']
+        })
+        
+        st.info(f"💡 **Sub-Agrupamento Criado!** O sistema uniu **{nomes_agrupados}** em um único pacote e passou o plástico bolha em volta. Medidas do novo blocão: {macro_x}x{macro_y}x{macro_z}mm")
+
+    # -------------------------------------------------------------
+    # PASSO 2: CALCULAR O FRETE NORMAL (Pacotão + Individuais)
+    # -------------------------------------------------------------
+    modalidades = ['ePacket', 'Air Parcel', 'EMS']
     limite_ext_epacket = limite_epacket_interno + overhead_epacket
     limite_ext_air = limite_air_interno + overhead_parcel
     limite_ext_ems = limite_ems_interno + overhead_parcel
@@ -339,10 +352,11 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
     for mod in modalidades:
         st.subheader(f"✈️ Frete: {mod}")
         
+        # Passa a lista_final (que contém as individuais + o blocão) pro algoritmo final
         resultado = empacotar_heuristics(
-            itens_para_envio, mod, 
+            lista_final_de_itens, mod, 
             limite_ext_air, limite_ext_ems, limite_ext_epacket, 
-            tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa
+            espessura_caixa, peso_caixa
         )
         
         if isinstance(resultado, str):
@@ -354,10 +368,10 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
             
             if itens_rejeitados:
                 nomes_rejeitados = ", ".join([i['nome'] for i in itens_rejeitados])
-                st.warning(f"🚫 **Atenção:** Os seguintes itens ignorados excedem os limites postais de tamanho/peso do **{mod}**, mesmo se enviados sozinhos: **{nomes_rejeitados}**")
+                st.warning(f"🚫 **Atenção:** Os seguintes itens/blocos excedem os limites do **{mod}**: **{nomes_rejeitados}**")
             
             if caixas_geradas:
-                st.success(f"Total de caixas necessárias para os itens compatíveis: {len(caixas_geradas)}")
+                st.success(f"Total de caixas necessárias: {len(caixas_geradas)}")
                 
                 for idx, caixa in enumerate(caixas_geradas):
                     nomes_conteudo = [p['item']['nome'] for p in caixa['placed_items']]
@@ -372,10 +386,8 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
                         texto_frete = "Erro no cálculo"
                     
                     with st.expander(f"📦 Caixa {idx+1} ({len(caixa['placed_items'])} itens) | Peso Total: {caixa['peso_total']}g | Frete: {texto_frete}"):
-                        st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
-                        st.write(f"**Peso Líquido dos Itens:** {caixa['peso_itens']}g | **Peso da Caixa Vazia:** {peso_caixa}g")
-                        st.write(f"**Dimensões Finais Externas (Caixa Fechada):** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
-                        st.write(f"**Volumetria Regra Postal:** {volumetria}mm")
+                        st.write(f"**Conteúdo Final:** {', '.join(nomes_conteudo)}")
+                        st.write(f"**Dimensões Finais da Caixa:** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
                         
                         figura_grafico = gerar_grafico_3d_novo(caixa)
                         st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}")
@@ -383,6 +395,6 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
                 if custo_total_jpy > 0:
                     st.info(f"**Custo Total Estimado ({mod}): ¥ {custo_total_jpy:,.0f}**")
             elif not caixas_geradas and itens_rejeitados:
-                st.error(f"Nenhum dos itens selecionados pode ser enviado via {mod}.")
+                st.error(f"Nenhum item cabe no {mod}.")
                 
         st.write("---")
