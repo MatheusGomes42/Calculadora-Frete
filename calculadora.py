@@ -69,8 +69,6 @@ def get_candidate_points(placed_items):
 def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, esp_cx, peso_cx):
     caixas = [] 
     rejeitados = []
-    
-    # esp_cx é a grossura do papelão da caixa externa
     extra_dim = (2 * esp_cx)
         
     for item in itens_ordenados:
@@ -116,7 +114,6 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
             bounds = sorted([dim_originais[0] + extra_dim, dim_originais[1] + extra_dim, dim_originais[2] + extra_dim], reverse=True)
             new_peso_total = item['peso'] + peso_cx
             
-            # Checa se cabe (usado para caixas normais e sub-agrupamentos)
             if modalidade == 'IGNORE_LIMITS' or atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
                 caixas.append({
                     'placed_items': [{'item': item, 'pos': (0,0,0), 'dim': dim_originais}],
@@ -167,20 +164,17 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
         
     return best_result
 
-# --- LÓGICA VISUAL (GRÁFICOS 3D INTERATIVOS) ---
+# --- LÓGICA VISUAL MELHORADA (GRÁFICOS 3D INTERATIVOS) ---
 
 def gerar_grafico_3d_novo(caixa_data):
     fig = go.Figure()
     cores = ['#E74C3C', '#3498DB', '#2ECC71', '#F1C40F', '#9B59B6', '#95A5A6', '#FF8C00']
     
+    # Precisamos criar um índice de cor mutável para não repetir cores nos itens
+    estado_cor = {'idx': 0}
     text_coords_x, text_coords_y, text_coords_z, text_content = [], [], [], []
 
-    for i, p in enumerate(caixa_data['placed_items']):
-        cor = cores[i % len(cores)]
-        nome = p['item']['nome']
-        x_pos, y_pos, z_pos = p['pos']
-        dx, dy, dz = p['dim']
-        
+    def draw_box(x_pos, y_pos, z_pos, dx, dy, dz, nome, cor, opacity=1.0, is_bubble=False):
         x_verts = [x_pos, x_pos, x_pos+dx, x_pos+dx, x_pos, x_pos, x_pos+dx, x_pos+dx]
         y_verts = [y_pos, y_pos+dy, y_pos+dy, y_pos, y_pos, y_pos+dy, y_pos+dy, y_pos]
         z_verts = [z_pos, z_pos, z_pos, z_pos, z_pos+dz, z_pos+dz, z_pos+dz, z_pos+dz]
@@ -192,24 +186,76 @@ def gerar_grafico_3d_novo(caixa_data):
         fig.add_trace(go.Mesh3d(
             x=x_verts, y=y_verts, z=z_verts,
             i=i_faces, j=j_faces, k=k_faces,
-            color=cor, opacity=1.0, flatshading=True,
-            name=nome, showlegend=True, hoverinfo='name'
+            color=cor, opacity=opacity, flatshading=True,
+            name=nome, showlegend=not is_bubble, hoverinfo='name'
         ))
 
-        offset = 3 
-        x_m, y_m, z_m = x_pos + dx/2, y_pos + dy/2, z_pos + dz/2
-        
-        face_centers = [
-            (x_m, y_m, z_pos + dz + offset), (x_m, y_m, z_pos - offset),
-            (x_m, y_pos - offset, z_m), (x_m, y_pos + dy + offset, z_m),
-            (x_pos + dx + offset, y_m, z_m), (x_pos - offset, y_m, z_m)
-        ]
+        if not is_bubble:
+            offset = 3 
+            x_m, y_m, z_m = x_pos + dx/2, y_pos + dy/2, z_pos + dz/2
+            
+            face_centers = [
+                (x_m, y_m, z_pos + dz + offset), (x_m, y_m, z_pos - offset),
+                (x_m, y_pos - offset, z_m), (x_m, y_pos + dy + offset, z_m),
+                (x_pos + dx + offset, y_m, z_m), (x_pos - offset, y_m, z_m)
+            ]
 
-        for fx, fy, fz in face_centers:
-            text_coords_x.append(fx)
-            text_coords_y.append(fy)
-            text_coords_z.append(fz)
-            text_content.append(nome)
+            for fx, fy, fz in face_centers:
+                text_coords_x.append(fx)
+                text_coords_y.append(fy)
+                text_coords_z.append(fz)
+                text_content.append(nome)
+
+    # Função matemática para descobrir como o motor 3D rotacionou o bloco inteiro
+    def get_rotation_mapping(orig, rot):
+        used = [False, False, False]
+        mapping = [0, 0, 0]
+        for i in range(3):
+            for j in range(3):
+                if rot[i] == orig[j] and not used[j]:
+                    mapping[i] = j
+                    used[j] = True
+                    break
+        return mapping
+
+    for p in caixa_data['placed_items']:
+        item = p['item']
+        x_pos, y_pos, z_pos = p['pos']
+        dx, dy, dz = p['dim']
+
+        # SE FOR UM PACOTE AGRUPADO, NÓS DESMONTAMOS ELE VISUALMENTE!
+        if item.get('is_grupo'):
+            # Desenha a caixa translúcida (Plástico bolha compartilhado)
+            draw_box(x_pos, y_pos, z_pos, dx, dy, dz, "Bolha (Grupo Compartilhado)", "lightblue", opacity=0.2, is_bubble=True)
+            
+            orig_dim = (item['x'], item['y'], item['z'])
+            rot_dim = (dx, dy, dz)
+            mapping = get_rotation_mapping(orig_dim, rot_dim)
+            offset_bolha = item.get('bolha_offset', 0)
+            
+            # Desenha cada item dentro da bolha compartilhada
+            for sp in item['sub_items']:
+                sp_pos = sp['pos']
+                sp_dim = sp['dim']
+                
+                # Aplica o offset do bolha para que elas fiquem no centro
+                padded_pos = [sp_pos[0] + offset_bolha, sp_pos[1] + offset_bolha, sp_pos[2] + offset_bolha]
+                
+                # Mapeia as coordenadas caso o bloco inteiro tenha sido girado no Tetris principal
+                rot_sp_pos = [padded_pos[mapping[0]], padded_pos[mapping[1]], padded_pos[mapping[2]]]
+                rot_sp_dim = [sp_dim[mapping[0]], sp_dim[mapping[1]], sp_dim[mapping[2]]]
+                
+                # Posiciona absolutamente dentro da caixa
+                abs_pos = [x_pos + rot_sp_pos[0], y_pos + rot_sp_pos[1], z_pos + rot_sp_pos[2]]
+                
+                cor = cores[estado_cor['idx'] % len(cores)]
+                estado_cor['idx'] += 1
+                draw_box(abs_pos[0], abs_pos[1], abs_pos[2], rot_sp_dim[0], rot_sp_dim[1], rot_sp_dim[2], sp['item']['nome'], cor)
+                
+        else:
+            cor = cores[estado_cor['idx'] % len(cores)]
+            estado_cor['idx'] += 1
+            draw_box(x_pos, y_pos, z_pos, dx, dy, dz, item['nome'], cor)
 
     fig.add_trace(go.Scatter3d(
         x=text_coords_x, y=text_coords_y, z=text_coords_z,
@@ -244,7 +290,7 @@ def gerar_grafico_3d_novo(caixa_data):
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v4.5", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v4.6", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
@@ -261,22 +307,18 @@ max_ui_ems = 3000 - overhead_parcel
 
 st.sidebar.divider()
 st.sidebar.header("🫧 Espessura da Proteção")
-espessura_protecao = st.sidebar.slider("Plástico Bolha (mm)", 0, 50, 10, 1, help="Esta espessura será aplicada de acordo com o agrupamento que você escolher no cadastro de cada item.")
+espessura_protecao = st.sidebar.slider("Plástico Bolha (mm)", 0, 50, 10, 1)
 
 st.sidebar.divider()
 st.sidebar.header("📏 Limites Volumétricos Úteis")
 
-limite_epacket_interno = st.sidebar.number_input(
-    "Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=min(850, max_ui_epacket), step=10)
-limite_air_interno = st.sidebar.number_input(
-    "Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
-limite_ems_interno = st.sidebar.number_input(
-    "Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
-
+limite_epacket_interno = st.sidebar.number_input("Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=min(850, max_ui_epacket), step=10)
+limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
+limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
 
 st.write("---")
-st.subheader("📝 Itens para Envio (Pré-Agrupamento Inteligente)")
-st.write("Selecione **'Agrupar Juntas'** para as figures que você quer colar e passar plástico bolha como se fossem um tijolo só. O sistema unirá elas antes de colocar na caixa.")
+st.subheader("📝 Itens para Envio")
+st.write("Selecione **'Compartilhar Bolha'** para agrupar figuras e passar o bolha como se fossem um bloco só, economizando muito espaço.")
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 itens_individuais = []
@@ -291,59 +333,45 @@ for i in range(num_figures):
     with col3: m3 = st.number_input("M3 (mm)", min_value=1, value=150, key=f"m3_{i}")
     with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
     with col5: 
-        # AQUI ESTÁ A MÁGICA DE UX QUE VOCÊ PEDIU!
-        st.write("Tipo de Proteção")
-        tipo_prot = st.radio("Proteção", ["Individual", "Agrupar Juntas"], horizontal=True, label_visibility="collapsed", key=f"prot_{i}")
+        st.write("Como proteger?")
+        tipo_prot = st.radio("Proteção", ["Individual", "Compartilhar Bolha"], horizontal=True, label_visibility="collapsed", key=f"prot_{i}")
         
     if tipo_prot == "Individual":
-        # Se for individual, ela ganha a própria camada de plástico bolha dela imediatamente
         dimensoes = sorted([m1 + (2*espessura_protecao), m2 + (2*espessura_protecao), m3 + (2*espessura_protecao)], reverse=True)
         itens_individuais.append({'nome': nome_item, 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': peso})
     else:
-        # Se for pra agrupar, pegamos as medidas "secas". O plástico bolha será passado nelas juntas depois!
         dimensoes = sorted([m1, m2, m3], reverse=True)
         itens_para_agrupar.append({'nome': nome_item, 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': peso})
 
 st.divider()
 
 if st.button("Calcular Empacotamento Inteligente", type="primary", use_container_width=True):
-    
-    # -------------------------------------------------------------
-    # PASSO 1: PRÉ-EMPACOTAMENTO (CRIAR O MACRO BLOCO COM AS AGRUPADAS)
-    # -------------------------------------------------------------
     lista_final_de_itens = itens_individuais.copy()
     
     if len(itens_para_agrupar) > 0:
-        # Roda o Tetris só para as agrupadas, sem plástico bolha, sem papelão e sem limite de tamanho (IGNORE_LIMITS)
-        # O objetivo é só descobrir qual é o menor tijolo que elas formam juntas.
         resultado_agrupamento = run_packing(
             sorted(itens_para_agrupar, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
             'IGNORE_LIMITS', 99999, 99999, 99999, 0, 0
         )
         
-        # Pega a "sub-caixa" gerada que uniu elas
         bloco_agrupado = resultado_agrupamento['caixas'][0] 
         nomes_agrupados = " + ".join([i['nome'] for i in itens_para_agrupar])
         
-        # Agora sim! Aplicamos a espessura do plástico bolha no tijolo inteiro!
         macro_x = bloco_agrupado['bound_x'] + (2 * espessura_protecao)
         macro_y = bloco_agrupado['bound_y'] + (2 * espessura_protecao)
         macro_z = bloco_agrupado['bound_z'] + (2 * espessura_protecao)
         
-        # Salva como um item único, gigantesco e protegido
         lista_final_de_itens.append({
-            'nome': f"📦 GRUPO ({nomes_agrupados})",
+            'nome': f"Grupo Bolha Compartilhado",
             'x': macro_x,
             'y': macro_y,
             'z': macro_z,
-            'peso': bloco_agrupado['peso_itens']
+            'peso': bloco_agrupado['peso_itens'],
+            'is_grupo': True, # Variável mágica para o gráfico não apagar elas!
+            'sub_items': bloco_agrupado['placed_items'],
+            'bolha_offset': espessura_protecao
         })
-        
-        st.info(f"💡 **Sub-Agrupamento Criado!** O sistema uniu **{nomes_agrupados}** em um único pacote e passou o plástico bolha em volta. Medidas do novo blocão: {macro_x}x{macro_y}x{macro_z}mm")
 
-    # -------------------------------------------------------------
-    # PASSO 2: CALCULAR O FRETE NORMAL (Pacotão + Individuais)
-    # -------------------------------------------------------------
     modalidades = ['ePacket', 'Air Parcel', 'EMS']
     limite_ext_epacket = limite_epacket_interno + overhead_epacket
     limite_ext_air = limite_air_interno + overhead_parcel
@@ -352,7 +380,6 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
     for mod in modalidades:
         st.subheader(f"✈️ Frete: {mod}")
         
-        # Passa a lista_final (que contém as individuais + o blocão) pro algoritmo final
         resultado = empacotar_heuristics(
             lista_final_de_itens, mod, 
             limite_ext_air, limite_ext_ems, limite_ext_epacket, 
@@ -368,14 +395,19 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
             
             if itens_rejeitados:
                 nomes_rejeitados = ", ".join([i['nome'] for i in itens_rejeitados])
-                st.warning(f"🚫 **Atenção:** Os seguintes itens/blocos excedem os limites do **{mod}**: **{nomes_rejeitados}**")
+                st.warning(f"🚫 **Atenção:** Os seguintes itens excedem os limites do **{mod}**: **{nomes_rejeitados}**")
             
             if caixas_geradas:
                 st.success(f"Total de caixas necessárias: {len(caixas_geradas)}")
                 
                 for idx, caixa in enumerate(caixas_geradas):
-                    nomes_conteudo = [p['item']['nome'] for p in caixa['placed_items']]
-                    
+                    nomes_conteudo = []
+                    for p in caixa['placed_items']:
+                        if p['item'].get('is_grupo'):
+                            nomes_conteudo.extend([sub['item']['nome'] for sub in p['item']['sub_items']])
+                        else:
+                            nomes_conteudo.append(p['item']['nome'])
+                            
                     volumetria = caixa['x'] + 2*(caixa['y']+caixa['z']) if mod != 'ePacket' else caixa['x']+caixa['y']+caixa['z']
                     valor_frete = estimar_frete_jpy(mod, caixa['peso_total'])
                     
@@ -385,9 +417,10 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
                     else:
                         texto_frete = "Erro no cálculo"
                     
-                    with st.expander(f"📦 Caixa {idx+1} ({len(caixa['placed_items'])} itens) | Peso Total: {caixa['peso_total']}g | Frete: {texto_frete}"):
-                        st.write(f"**Conteúdo Final:** {', '.join(nomes_conteudo)}")
-                        st.write(f"**Dimensões Finais da Caixa:** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
+                    with st.expander(f"📦 Caixa {idx+1} ({len(nomes_conteudo)} itens) | Peso Total: {caixa['peso_total']}g | Frete: {texto_frete}"):
+                        st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
+                        st.write(f"**Peso Líquido:** {caixa['peso_itens']}g | **Peso da Caixa Vazia:** {peso_caixa}g")
+                        st.write(f"**Dimensões Finais Externas:** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
                         
                         figura_grafico = gerar_grafico_3d_novo(caixa)
                         st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}")
