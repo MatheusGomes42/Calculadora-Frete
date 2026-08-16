@@ -10,18 +10,20 @@ def atende_limite(x, y, z, peso, modalidade, limite_custom_air, limite_custom_em
     # As variáveis x, y, z aqui já incluem a caixa e a proteção.
     if modalidade == 'ePacket': 
         volumetria = x + y + z
-        # Garante que não passe de 900mm (limite postal máximo oficial L+W+H)
+        # Limite absoluto postal é 900
         limite_efetivo = min(limite_custom_epacket, 900)
         return x <= 600 and volumetria <= limite_efetivo and peso <= 2000
         
     elif modalidade == 'Air Parcel': 
         volumetria = x + 2 * (y + z)
-        limite_efetivo = min(limite_custom_air, 1950)
+        # Limite absoluto postal é 2000
+        limite_efetivo = min(limite_custom_air, 2000)
         return x <= 1050 and volumetria <= limite_efetivo and peso <= 30000
         
     elif modalidade == 'EMS': 
         volumetria = x + 2 * (y + z)
-        limite_efetivo = min(limite_custom_ems, 2950)
+        # Limite absoluto postal é 3000
+        limite_efetivo = min(limite_custom_ems, 3000)
         return x <= 1500 and volumetria <= limite_efetivo and peso <= 30000
         
     return False
@@ -70,9 +72,8 @@ def get_candidate_points(placed_items):
 
 def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx):
     caixas = [] 
-    rejeitados = [] # Nova lista para armazenar itens que não cabem
+    rejeitados = []
     
-    # Se uma espessura tem X mm, ela soma 2*X na dimensão total (dois lados)
     extra_dim = (2 * esp_cx)
     if tipo_prot == 'Conjunta':
         extra_dim += (2 * esp_prot)
@@ -120,7 +121,6 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
             bounds = sorted([dim_originais[0] + extra_dim, dim_originais[1] + extra_dim, dim_originais[2] + extra_dim], reverse=True)
             new_peso_total = item['peso'] + peso_cx
             
-            # Checa se o item consegue ser enviado na modalidade ao menos SOZINHO
             if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
                 caixas.append({
                     'placed_items': [{'item': item, 'pos': (0,0,0), 'dim': dim_originais}],
@@ -130,16 +130,15 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                     'peso_total': new_peso_total
                 })
             else:
-                # O item é fisicamente incapaz de ir nessa modalidade, adicionamos aos rejeitados e o loop continua!
                 rejeitados.append(item)
                 
     return {'caixas': caixas, 'rejeitados': rejeitados}
 
 def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx):
     heuristics = [
-        sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True), # Por Volume
-        sorted(itens, key=lambda i: i['peso'], reverse=True),            # Por Peso
-        sorted(itens, key=lambda i: i['peso']/(i['x']*i['y']*i['z'] + 1), reverse=True), # Por Densidade
+        sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
+        sorted(itens, key=lambda i: i['peso'], reverse=True),
+        sorted(itens, key=lambda i: i['peso']/(i['x']*i['y']*i['z'] + 1), reverse=True),
     ]
     
     random.seed(42)
@@ -168,7 +167,6 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
             best_cost = cost
             best_result = result
             
-    # Caso nenhum layout consiga empacotar algo
     if best_result is None or (len(best_result['caixas']) == 0 and len(best_result['rejeitados']) > 0):
         return best_error
         
@@ -251,14 +249,22 @@ def gerar_grafico_3d_novo(caixa_data):
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v3.1", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v3.2", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("🛠️ Configurações da Caixa")
 
 peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50, help="Será somado ao peso final dos itens.")
-espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1, help="Espessura da parede da caixa. Ex: 5mm de cada lado = 1cm a mais na dimensão.")
+espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1, help="Espessura da parede da caixa.")
+
+# CÁLCULO DA TRAVA DINÂMICA DE VOLUMETRIA (Matemática exata do papelão)
+overhead_epacket = espessura_caixa * 6   # X + Y + Z (2 paredes cada)
+overhead_parcel = espessura_caixa * 10   # X + 2Y + 2Z (Ganha peso duplo nas contas laterais)
+
+max_ui_epacket = 900 - overhead_epacket
+max_ui_air = 2000 - overhead_parcel
+max_ui_ems = 3000 - overhead_parcel
 
 st.sidebar.divider()
 st.sidebar.header("🫧 Plástico Bolha e Proteção")
@@ -269,10 +275,29 @@ tipo_protecao = st.sidebar.radio("Como aplicar a proteção?",
 )
 
 st.sidebar.divider()
-st.sidebar.header("📏 Limites Postais")
-limite_epacket = st.sidebar.number_input("Limite ePacket (mm)", min_value=500, max_value=900, value=850, step=10, help="Máximo postal 900mm (L+W+H)")
-limite_air = st.sidebar.number_input("Limite Air Parcel (mm)", min_value=500, max_value=1950, value=1800, step=50)
-limite_ems = st.sidebar.number_input("Limite EMS (mm)", min_value=500, max_value=2950, value=2800, step=50)
+st.sidebar.header("📏 Limites Volumétricos Úteis")
+st.sidebar.markdown("*(Trava automática para evitar criar caixas que os Correios recusem)*")
+
+limite_epacket_interno = st.sidebar.number_input(
+    "Limite Útil ePacket (mm)", 
+    min_value=500, max_value=max_ui_epacket, 
+    value=min(850, max_ui_epacket), step=10, 
+    help=f"Máximo de 900mm - {overhead_epacket}mm de papelão = {max_ui_epacket}mm"
+)
+
+limite_air_interno = st.sidebar.number_input(
+    "Limite Útil Air Parcel (mm)", 
+    min_value=500, max_value=max_ui_air, 
+    value=min(1800, max_ui_air), step=50,
+    help=f"Máximo de 2000mm - {overhead_parcel}mm de papelão = {max_ui_air}mm"
+)
+
+limite_ems_interno = st.sidebar.number_input(
+    "Limite Útil EMS (mm)", 
+    min_value=500, max_value=max_ui_ems, 
+    value=min(2800, max_ui_ems), step=50,
+    help=f"Máximo de 3000mm - {overhead_parcel}mm de papelão = {max_ui_ems}mm"
+)
 
 num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 itens_para_envio = []
@@ -306,10 +331,19 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
     modalidades = ['ePacket', 'Air Parcel', 'EMS']
     tipo_prot_str = "Individual" if "Individual" in tipo_protecao else "Conjunta"
     
+    # Adicionando o papelão de volta ao "Limite Útil" do usuário para o sistema criar a caixa real corretamente
+    limite_ext_epacket = limite_epacket_interno + overhead_epacket
+    limite_ext_air = limite_air_interno + overhead_parcel
+    limite_ext_ems = limite_ems_interno + overhead_parcel
+    
     for mod in modalidades:
         st.subheader(f"✈️ Frete: {mod}")
         
-        resultado = empacotar_heuristics(itens_para_envio, mod, limite_air, limite_ems, limite_epacket, tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa)
+        resultado = empacotar_heuristics(
+            itens_para_envio, mod, 
+            limite_ext_air, limite_ext_ems, limite_ext_epacket, 
+            tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa
+        )
         
         if isinstance(resultado, str):
             st.error(resultado)
@@ -318,12 +352,10 @@ if st.button("Calcular Empacotamento Inteligente", type="primary", use_container
             itens_rejeitados = resultado['rejeitados']
             custo_total_jpy = 0
             
-            # --- ALERTA DE ITENS REJEITADOS ---
             if itens_rejeitados:
                 nomes_rejeitados = ", ".join([i['nome'] for i in itens_rejeitados])
                 st.warning(f"🚫 **Atenção:** Os seguintes itens ignorados excedem os limites postais de tamanho/peso do **{mod}**, mesmo se enviados sozinhos: **{nomes_rejeitados}**")
             
-            # --- MOSTRADOR DE CAIXAS ---
             if caixas_geradas:
                 st.success(f"Total de caixas necessárias para os itens compatíveis: {len(caixas_geradas)}")
                 
