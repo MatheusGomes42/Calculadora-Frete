@@ -7,22 +7,18 @@ import random
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
 def atende_limite(x, y, z, peso, modalidade, limite_custom_air, limite_custom_ems, limite_custom_epacket):
-    # As variáveis x, y, z aqui já incluem a caixa e a proteção.
     if modalidade == 'ePacket': 
         volumetria = x + y + z
-        # Limite absoluto postal é 900
         limite_efetivo = min(limite_custom_epacket, 900)
         return x <= 600 and volumetria <= limite_efetivo and peso <= 2000
         
     elif modalidade == 'Air Parcel': 
         volumetria = x + 2 * (y + z)
-        # Limite absoluto postal é 2000
         limite_efetivo = min(limite_custom_air, 2000)
         return x <= 1050 and volumetria <= limite_efetivo and peso <= 30000
         
     elif modalidade == 'EMS': 
         volumetria = x + 2 * (y + z)
-        # Limite absoluto postal é 3000
         limite_efetivo = min(limite_custom_ems, 3000)
         return x <= 1500 and volumetria <= limite_efetivo and peso <= 30000
         
@@ -48,7 +44,6 @@ def estimar_frete_jpy(modalidade, peso_g):
     return None
 
 def calcular_taxa_servico(peso_g, modalidade, servico):
-    """Calcula a taxa baseada na tabela da imagem"""
     if servico == "Nenhum": return 0
     
     if servico == "Caixa do Tesouro":
@@ -204,7 +199,6 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
                 valid = False
                 break
             
-            # Cálculo otimizador considerando as taxas
             cx_taxa = calcular_taxa_servico(cx['peso_total'], modalidade, servico)
             cost += (cx_frete + cx_taxa + taxa_fixa)
             
@@ -328,97 +322,113 @@ def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
     st.info(f"**Custo Total Estimado ({mod} c/ taxas): ¥ {custo_total_jpy:,.0f}**")
 
 
+# --- GERENCIAMENTO DE ESTADO (LISTA DINÂMICA DE ITENS) ---
+
+if 'itens' not in st.session_state:
+    st.session_state.itens = [
+        {'id': 1, 'nome': 'Figure 1', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500}
+    ]
+    st.session_state.next_id = 2
+
+def add_item_cb():
+    n_id = st.session_state.next_id
+    st.session_state.itens.append({'id': n_id, 'nome': f'Item {n_id}', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
+    st.session_state.next_id += 1
+
+def remove_item_cb(uid):
+    st.session_state.itens = [i for i in st.session_state.itens if i['id'] != uid]
+    if len(st.session_state.itens) == 0:
+        add_item_cb() # Garante que sempre terá pelo menos 1 item
+
+def duplicate_item_cb(uid):
+    idx = next(i for i, item in enumerate(st.session_state.itens) if item['id'] == uid)
+    original = st.session_state.itens[idx]
+    n_id = st.session_state.next_id
+    nova_copia = original.copy()
+    nova_copia['id'] = n_id
+    nova_copia['nome'] += " (Cópia)"
+    st.session_state.itens.insert(idx + 1, nova_copia)
+    st.session_state.next_id += 1
+
+
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v3.5", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v4.0", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("🛠️ Configurações da Caixa")
-
-peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50, help="Será somado ao peso final dos itens.")
-espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1, help="Espessura da parede da caixa.")
+peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50)
+espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1)
 
 overhead_epacket = espessura_caixa * 6   
 overhead_parcel = espessura_caixa * 10   
-
 max_ui_epacket = 900 - overhead_epacket
 max_ui_air = 2000 - overhead_parcel
 max_ui_ems = 3000 - overhead_parcel
 
 st.sidebar.divider()
 st.sidebar.header("🫧 Plástico Bolha e Proteção")
-
-espessura_protecao = st.sidebar.slider("Espessura da Proteção (mm)", 0, 50, 10, 1, help="Camada de plástico bolha/jornal.")
-
-tipo_protecao = st.sidebar.radio("Como aplicar a proteção?", 
-    ["Individual (por item)", "Conjunta (na caixa inteira)"],
-    help="Individual envolve cada figure (bom se tiverem caixas separadas). Conjunta envolve todas juntas se estiverem coladas."
-)
+espessura_protecao = st.sidebar.slider("Espessura da Proteção (mm)", 0, 50, 10, 1)
+tipo_protecao = st.sidebar.radio("Como aplicar a proteção?", ["Individual (por item)", "Conjunta (na caixa inteira)"])
 
 st.sidebar.divider()
 st.sidebar.header("📋 Taxas Adicionais (Por Caixa)")
-
-tipo_servico = st.sidebar.selectbox(
-    "Taxa de Serviço (Tabela)", 
-    ["Nenhum", "Caixa do Tesouro", "Gato Preto"]
-)
-
-taxa_fixa = st.sidebar.number_input(
-    "Taxa Fixa Adicional (¥)", 
-    min_value=0, value=0, step=100,
-    help="Valor somado a cada caixa gerada."
-)
+tipo_servico = st.sidebar.selectbox("Taxa de Serviço (Tabela)", ["Nenhum", "Caixa do Tesouro", "Gato Preto"])
+taxa_fixa = st.sidebar.number_input("Taxa Fixa Adicional (¥)", min_value=0, value=0, step=100)
 
 st.sidebar.divider()
 st.sidebar.header("📏 Limites Volumétricos Úteis")
+limite_epacket_interno = st.sidebar.number_input("Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=min(850, max_ui_epacket), step=10)
+limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
+limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
 
-limite_epacket_interno = st.sidebar.number_input(
-    "Limite Útil ePacket (mm)", 
-    min_value=500, max_value=max_ui_epacket, 
-    value=min(850, max_ui_epacket), step=10, 
-    help=f"Máximo de 900mm - {overhead_epacket}mm de papelão = {max_ui_epacket}mm"
-)
+# --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ITENS) ---
+st.subheader("🛒 Itens para Envio")
+st.write("*(Dica: Adicione, duplique ou remova produtos usando os botões à direita)*")
 
-limite_air_interno = st.sidebar.number_input(
-    "Limite Útil Air Parcel (mm)", 
-    min_value=500, max_value=max_ui_air, 
-    value=min(1800, max_ui_air), step=50,
-    help=f"Máximo de 2000mm - {overhead_parcel}mm de papelão = {max_ui_air}mm"
-)
+# Cabeçalhos das Colunas
+hcols = st.columns([2.5, 1, 1, 1, 1, 0.5, 0.5])
+hcols[0].write("**Nome do Produto**")
+hcols[1].write("**Med. 1 (mm)**")
+hcols[2].write("**Med. 2 (mm)**")
+hcols[3].write("**Med. 3 (mm)**")
+hcols[4].write("**Peso (g)**")
 
-limite_ems_interno = st.sidebar.number_input(
-    "Limite Útil EMS (mm)", 
-    min_value=500, max_value=max_ui_ems, 
-    value=min(2800, max_ui_ems), step=50,
-    help=f"Máximo de 3000mm - {overhead_parcel}mm de papelão = {max_ui_ems}mm"
-)
-
-num_figures = st.number_input("Quantos itens vai enviar?", min_value=1, max_value=15, value=1)
 itens_para_envio = []
 
-st.write(f"*(Dica: Se a proteção for **Individual**, ela será somada automaticamente abaixo)*")
-
-for i in range(num_figures):
-    col0, col1, col2, col3, col4 = st.columns([2, 1, 1, 1, 1]) 
-    with col0: nome_item = st.text_input(f"Item {i+1}", value=f"Figure {i+1}", key=f"nome_{i}")
-    with col1: m1 = st.number_input("Med. 1 (mm)", min_value=1, value=300, key=f"m1_{i}")
-    with col2: m2 = st.number_input("Med. 2 (mm)", min_value=1, value=200, key=f"m2_{i}")
-    with col3: m3 = st.number_input("Med. 3 (mm)", min_value=1, value=150, key=f"m3_{i}")
-    with col4: peso = st.number_input("Peso (g)", min_value=1, value=1500, key=f"peso_{i}")
-        
-    if tipo_protecao == "Individual (por item)":
-        dimensoes = sorted([m1 + (2*espessura_protecao), m2 + (2*espessura_protecao), m3 + (2*espessura_protecao)], reverse=True)
-    else:
-        dimensoes = sorted([m1, m2, m3], reverse=True)
+# Loop desenhando os campos baseados no st.session_state
+for item in st.session_state.itens:
+    uid = item['id']
+    cols = st.columns([2.5, 1, 1, 1, 1, 0.5, 0.5])
     
+    # Text Inputs e Number Inputs salvam de volta no dicionário do item
+    item['nome'] = cols[0].text_input("Nome", value=item['nome'], key=f"n_{uid}", label_visibility="collapsed")
+    item['m1'] = cols[1].number_input("M1", min_value=1, value=item['m1'], key=f"m1_{uid}", label_visibility="collapsed")
+    item['m2'] = cols[2].number_input("M2", min_value=1, value=item['m2'], key=f"m2_{uid}", label_visibility="collapsed")
+    item['m3'] = cols[3].number_input("M3", min_value=1, value=item['m3'], key=f"m3_{uid}", label_visibility="collapsed")
+    item['peso'] = cols[4].number_input("Peso", min_value=1, value=item['peso'], key=f"p_{uid}", label_visibility="collapsed")
+    
+    # Botões de Ação
+    cols[5].button("📋", key=f"dup_{uid}", help="Duplicar este item", on_click=duplicate_item_cb, args=(uid,))
+    cols[6].button("❌", key=f"rem_{uid}", help="Remover este item", on_click=remove_item_cb, args=(uid,))
+    
+    # Calcula as dimensões finais para a simulação com base na proteção
+    if tipo_protecao == "Individual (por item)":
+        dimensoes = sorted([item['m1'] + (2*espessura_protecao), item['m2'] + (2*espessura_protecao), item['m3'] + (2*espessura_protecao)], reverse=True)
+    else:
+        dimensoes = sorted([item['m1'], item['m2'], item['m3']], reverse=True)
+        
     itens_para_envio.append({
-        'nome': nome_item, 
+        'nome': item['nome'], 
         'x': dimensoes[0], 
         'y': dimensoes[1], 
         'z': dimensoes[2], 
-        'peso': peso
+        'peso': item['peso']
     })
+
+# Botão para adicionar item novo no final da lista
+st.button("➕ Adicionar Novo Produto", on_click=add_item_cb)
 
 st.divider()
 
@@ -432,7 +442,6 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
     
     resultados_calculados = []
     
-    # 1. Processar todas as modalidades e calcular os custos totais
     for mod in modalidades:
         resultado = empacotar_heuristics(
             itens_para_envio, mod, 
@@ -453,17 +462,13 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
             resultado['mod'] = mod
             resultados_calculados.append(resultado)
             
-    # 2. Ordenar para achar a melhor opção:
-    #    Prioridade 1: Menos itens rejeitados (queremos enviar tudo se possível)
-    #    Prioridade 2: Evitar EMS (Atribui 1 para EMS e 0 para os outros. Assim EMS vai pro final da fila em caso de empate)
-    #    Prioridade 3: Menor custo total
+    # Ordem: Menos Rejeitados -> Evita EMS -> Mais Barato
     resultados_calculados.sort(key=lambda x: (
         x['qtd_rejeitados'], 
         1 if x['mod'] == 'EMS' else 0, 
         x['custo_total']
     ))
     
-    # 3. Exibir na Interface
     if not resultados_calculados:
         st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis.")
     else:
@@ -473,7 +478,6 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
         tab_melhor, tab_outras = st.tabs(["🏆 Melhor Opção", "📦 Outras Opções"])
         
         with tab_melhor:
-            # Aviso se o EMS acabou sendo eleito porque era o ÚNICO que cabia
             if melhor_opcao['mod'] == 'EMS':
                 st.warning("⚠️ **Aviso:** EMS foi selecionado como a melhor (ou única) opção capaz de levar esta quantidade/tamanho de itens, mas lembre-se que a fiscalização tende a ser mais rigorosa.")
                 
