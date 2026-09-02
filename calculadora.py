@@ -3,7 +3,8 @@ import plotly.graph_objects as go
 import math
 import itertools
 import random
-import json
+import csv
+import io
 
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
@@ -211,7 +212,7 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
         
     return best_result
 
-# --- LÓGICA VISUAL (GRÁFICOS 3D INTERATIVOS) ---
+# --- LÓGICA VISUAL (GRÁFICOS 3D E EXIBIÇÃO) ---
 def gerar_grafico_3d_novo(caixa_data):
     fig = go.Figure()
     cores = ['#E74C3C', '#3498DB', '#2ECC71', '#F1C40F', '#9B59B6', '#95A5A6', '#FF8C00']
@@ -320,7 +321,6 @@ def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
 
 
 # --- GERENCIAMENTO DE ESTADO (LISTA DE ENVIO E SUÍTE) ---
-
 if 'itens' not in st.session_state:
     st.session_state.itens = [{'id': 1, 'nome': 'Figure 1', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500}]
     st.session_state.suite = []
@@ -343,7 +343,6 @@ def duplicate_item_cb(uid):
     st.session_state.itens.insert(idx + 1, nova_copia)
     st.session_state.next_id += 1
 
-# --- FUNÇÕES DA SUÍTE ---
 def to_suite_cb(uid):
     idx = next(i for i, item in enumerate(st.session_state.itens) if item['id'] == uid)
     item = st.session_state.itens.pop(idx)
@@ -362,9 +361,10 @@ def add_suite_item_cb():
     st.session_state.suite.append({'id': st.session_state.next_id, 'nome': f'Item Guardado', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
     st.session_state.next_id += 1
 
+
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v4.5", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v5.0", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
@@ -395,7 +395,7 @@ limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min
 limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
 
 
-# --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ITENS) ---
+# --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ENVIO) ---
 st.subheader("🛒 Itens para Envio (Caixa Atual)")
 
 hcols = st.columns([2.5, 1, 1, 1, 1, 0.4, 0.4, 0.4])
@@ -437,13 +437,72 @@ st.button("➕ Adicionar Novo Produto para Envio", on_click=add_item_cb)
 # --- ÁREA DA SUÍTE (ESTOQUE) ---
 st.divider()
 st.subheader("📥 Minha Suíte (Estoque)")
-st.write("*(Deixe seus produtos guardados aqui. Exporte para não perder na próxima visita!)*")
+st.write("*(Deixe seus produtos guardados aqui. Baixe em Excel/CSV para guardar e carregar depois!)*")
 
+# Criação do arquivo CSV em memória para o botão de download
+csv_output = io.StringIO()
+writer = csv.DictWriter(csv_output, fieldnames=["nome", "m1", "m2", "m3", "peso"])
+writer.writeheader()
+for item in st.session_state.suite:
+    writer.writerow({"nome": item['nome'], "m1": item['m1'], "m2": item['m2'], "m3": item['m3'], "peso": item['peso']})
+
+cols_acoes_suite = st.columns([2.5, 2, 4])
+cols_acoes_suite[0].button("➕ Novo Item Direto na Suíte", on_click=add_suite_item_cb)
+cols_acoes_suite[1].download_button(
+    label="💾 Baixar Suíte (.CSV)", 
+    data=csv_output.getvalue().encode('utf-8-sig'), # utf-8-sig ajuda o excel a ler acentos melhor
+    file_name="minha_suite.csv", 
+    mime="text/csv", 
+    help="Baixe sua suíte para abrir no Excel ou carregar no futuro."
+)
+
+# Upload de arquivo CSV
+with st.expander("📂 Carregar Suíte Salva (Backup .CSV)"):
+    arquivo_up = st.file_uploader("Selecione o arquivo .csv modificado ou salvo anteriormente", type=["csv"])
+    
+    # Reseta a flag se o usuário remover o arquivo no "X"
+    if arquivo_up is None:
+        st.session_state.last_uploaded = None
+        
+    if arquivo_up is not None:
+        # Só processa se for um arquivo novo (evita que Streamlit adicione os itens em loop)
+        if 'last_uploaded' not in st.session_state or st.session_state.last_uploaded != arquivo_up.name:
+            try:
+                content = arquivo_up.getvalue().decode('utf-8-sig') # Compatível com Excel
+                
+                # Identifica dinamicamente se o delimitador é vírgula ou ponto-e-vírgula
+                primeira_linha = content.split('\n')[0]
+                delimiter = ';' if ';' in primeira_linha else ','
+                
+                reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+                
+                for row in reader:
+                    # Garantir que lê as colunas mesmo que o usuário bagunce letras maiúsculas/minúsculas
+                    row_lower = {k.strip().lower(): v for k, v in row.items() if k}
+                    
+                    st.session_state.suite.append({
+                        'id': st.session_state.next_id,
+                        'nome': row_lower.get('nome', 'Item Importado').strip(),
+                        'm1': int(float(row_lower.get('m1', 300))),
+                        'm2': int(float(row_lower.get('m2', 200))),
+                        'm3': int(float(row_lower.get('m3', 150))),
+                        'peso': int(float(row_lower.get('peso', 1500)))
+                    })
+                    st.session_state.next_id += 1
+                    
+                st.session_state.last_uploaded = arquivo_up.name
+                st.success("Suíte carregada com sucesso! Feche esta guia.")
+                # st.rerun() faria um reload forçado, mas a mecânica da UI do Streamlit atualizará a lista na próxima interação
+                
+            except Exception as e:
+                st.error(f"Erro ao ler o arquivo CSV. Detalhes: {e}")
+
+# Renderizar lista da Suíte
 if not st.session_state.suite:
-    st.info("Sua suíte está vazia. Você pode adicionar itens diretamente aqui ou enviá-los da lista de envio acima usando o botão 📥.")
+    st.info("Sua suíte está vazia. Você pode adicionar itens, carregar um CSV ou enviar da lista de envio usando o botão 📥.")
 else:
     scols_h = st.columns([2.5, 1, 1, 1, 1, 0.8, 0.4])
-    scols_h[0].write("**Nome do Produto**")
+    scols_h[0].write("**Nome do Produto (Suíte)**")
     
     for item in st.session_state.suite:
         uid = item['id']
@@ -455,28 +514,8 @@ else:
         item['m3'] = cols[3].number_input("M3", min_value=1, value=item['m3'], key=f"sm3_{uid}", label_visibility="collapsed")
         item['peso'] = cols[4].number_input("Peso", min_value=1, value=item['peso'], key=f"sp_{uid}", label_visibility="collapsed")
         
-        cols[5].button("⬆️ Enviar", key=f"fromsuite_{uid}", help="Mover para Envio", on_click=from_suite_cb, args=(uid,))
+        cols[5].button("⬆️ Enviar", key=f"fromsuite_{uid}", help="Mover para Envio Atual", on_click=from_suite_cb, args=(uid,))
         cols[6].button("❌", key=f"srem_{uid}", help="Remover da Suíte", on_click=remove_suite_cb, args=(uid,))
-
-cols_acoes_suite = st.columns([2, 2, 2, 4])
-cols_acoes_suite[0].button("➕ Novo Item na Suíte", on_click=add_suite_item_cb)
-
-# BACKUP DA SUÍTE (JSON)
-suite_json = json.dumps(st.session_state.suite)
-cols_acoes_suite[1].download_button(label="💾 Baixar Suíte", data=suite_json, file_name="minha_suite.json", mime="application/json", help="Baixe sua suíte para carregar no futuro.")
-
-with st.expander("📂 Carregar Suíte Salva (Backup)"):
-    arquivo_up = st.file_uploader("Selecione o arquivo minha_suite.json", type="json")
-    if arquivo_up is not None:
-        try:
-            dados_carregados = json.load(arquivo_up)
-            for item in dados_carregados:
-                item['id'] = st.session_state.next_id
-                st.session_state.next_id += 1
-                st.session_state.suite.append(item)
-            st.success("Suíte carregada com sucesso! Feche esta caixa para continuar.")
-        except:
-            st.error("Erro ao ler o arquivo. Certifique-se de que é o arquivo .json baixado daqui.")
 
 
 # --- CÁLCULO ---
