@@ -330,7 +330,7 @@ def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v3.4", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v3.5", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
@@ -453,8 +453,15 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
             resultado['mod'] = mod
             resultados_calculados.append(resultado)
             
-    # 2. Ordenar para achar a melhor (Menos rejeitados primeiro, depois menor custo)
-    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['custo_total']))
+    # 2. Ordenar para achar a melhor opção:
+    #    Prioridade 1: Menos itens rejeitados (queremos enviar tudo se possível)
+    #    Prioridade 2: Evitar EMS (Atribui 1 para EMS e 0 para os outros. Assim EMS vai pro final da fila em caso de empate)
+    #    Prioridade 3: Menor custo total
+    resultados_calculados.sort(key=lambda x: (
+        x['qtd_rejeitados'], 
+        1 if x['mod'] == 'EMS' else 0, 
+        x['custo_total']
+    ))
     
     # 3. Exibir na Interface
     if not resultados_calculados:
@@ -466,6 +473,10 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
         tab_melhor, tab_outras = st.tabs(["🏆 Melhor Opção", "📦 Outras Opções"])
         
         with tab_melhor:
+            # Aviso se o EMS acabou sendo eleito porque era o ÚNICO que cabia
+            if melhor_opcao['mod'] == 'EMS':
+                st.warning("⚠️ **Aviso:** EMS foi selecionado como a melhor (ou única) opção capaz de levar esta quantidade/tamanho de itens, mas lembre-se que a fiscalização tende a ser mais rigorosa.")
+                
             st.header(f"✨ A Mais Vantajosa: {melhor_opcao['mod']}")
             exibir_resultado_modalidade(melhor_opcao['mod'], melhor_opcao, tipo_servico, taxa_fixa)
             
@@ -476,4 +487,4 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
                     exibir_resultado_modalidade(op['mod'], op, tipo_servico, taxa_fixa)
                     st.write("---")
             else:
-                st.write("Não há outras opções viáveis para este conjunto de itens.")
+                st.write("Não há outras opções viáveis para este conjunto de itens (limite de tamanho/peso excedido nas outras modalidades).")
