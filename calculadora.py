@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import math
 import itertools
 import random
+import json
 
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
@@ -85,7 +86,6 @@ def calcular_taxa_servico(peso_g, modalidade, servico):
     return 0
 
 # --- MOTOR DE EMPACOTAMENTO 3D ---
-
 def check_overlap(pos, dim, placed_items):
     x1, y1, z1 = pos
     dx1, dy1, dz1 = dim
@@ -212,7 +212,6 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
     return best_result
 
 # --- LÓGICA VISUAL (GRÁFICOS 3D INTERATIVOS) ---
-
 def gerar_grafico_3d_novo(caixa_data):
     fig = go.Figure()
     cores = ['#E74C3C', '#3498DB', '#2ECC71', '#F1C40F', '#9B59B6', '#95A5A6', '#FF8C00']
@@ -286,8 +285,6 @@ def gerar_grafico_3d_novo(caixa_data):
     )
     return fig
 
-# --- FUNÇÃO AUXILIAR DE EXIBIÇÃO ---
-
 def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
     caixas_geradas = resultado['caixas']
     itens_rejeitados = resultado['rejeitados']
@@ -322,38 +319,52 @@ def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
     st.info(f"**Custo Total Estimado ({mod} c/ taxas): ¥ {custo_total_jpy:,.0f}**")
 
 
-# --- GERENCIAMENTO DE ESTADO (LISTA DINÂMICA DE ITENS) ---
+# --- GERENCIAMENTO DE ESTADO (LISTA DE ENVIO E SUÍTE) ---
 
 if 'itens' not in st.session_state:
-    st.session_state.itens = [
-        {'id': 1, 'nome': 'Figure 1', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500}
-    ]
+    st.session_state.itens = [{'id': 1, 'nome': 'Figure 1', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500}]
+    st.session_state.suite = []
     st.session_state.next_id = 2
 
 def add_item_cb():
-    n_id = st.session_state.next_id
-    st.session_state.itens.append({'id': n_id, 'nome': f'Item {n_id}', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
+    st.session_state.itens.append({'id': st.session_state.next_id, 'nome': f'Item {st.session_state.next_id}', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
     st.session_state.next_id += 1
 
 def remove_item_cb(uid):
     st.session_state.itens = [i for i in st.session_state.itens if i['id'] != uid]
-    if len(st.session_state.itens) == 0:
-        add_item_cb() # Garante que sempre terá pelo menos 1 item
+    if len(st.session_state.itens) == 0: add_item_cb()
 
 def duplicate_item_cb(uid):
     idx = next(i for i, item in enumerate(st.session_state.itens) if item['id'] == uid)
     original = st.session_state.itens[idx]
-    n_id = st.session_state.next_id
     nova_copia = original.copy()
-    nova_copia['id'] = n_id
+    nova_copia['id'] = st.session_state.next_id
     nova_copia['nome'] += " (Cópia)"
     st.session_state.itens.insert(idx + 1, nova_copia)
     st.session_state.next_id += 1
 
+# --- FUNÇÕES DA SUÍTE ---
+def to_suite_cb(uid):
+    idx = next(i for i, item in enumerate(st.session_state.itens) if item['id'] == uid)
+    item = st.session_state.itens.pop(idx)
+    st.session_state.suite.append(item)
+    if len(st.session_state.itens) == 0: add_item_cb()
+        
+def from_suite_cb(uid):
+    idx = next(i for i, item in enumerate(st.session_state.suite) if item['id'] == uid)
+    item = st.session_state.suite.pop(idx)
+    st.session_state.itens.append(item)
+
+def remove_suite_cb(uid):
+    st.session_state.suite = [i for i in st.session_state.suite if i['id'] != uid]
+
+def add_suite_item_cb():
+    st.session_state.suite.append({'id': st.session_state.next_id, 'nome': f'Item Guardado', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
+    st.session_state.next_id += 1
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v4.0", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v4.5", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
@@ -383,53 +394,92 @@ limite_epacket_interno = st.sidebar.number_input("Limite Útil ePacket (mm)", mi
 limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
 limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
 
-# --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ITENS) ---
-st.subheader("🛒 Itens para Envio")
-st.write("*(Dica: Adicione, duplique ou remova produtos usando os botões à direita)*")
 
-# Cabeçalhos das Colunas
-hcols = st.columns([2.5, 1, 1, 1, 1, 0.5, 0.5])
+# --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ITENS) ---
+st.subheader("🛒 Itens para Envio (Caixa Atual)")
+
+hcols = st.columns([2.5, 1, 1, 1, 1, 0.4, 0.4, 0.4])
 hcols[0].write("**Nome do Produto**")
-hcols[1].write("**Med. 1 (mm)**")
-hcols[2].write("**Med. 2 (mm)**")
-hcols[3].write("**Med. 3 (mm)**")
+hcols[1].write("**M1 (mm)**")
+hcols[2].write("**M2 (mm)**")
+hcols[3].write("**M3 (mm)**")
 hcols[4].write("**Peso (g)**")
+hcols[5].write("**Suíte**")
+hcols[6].write("**Duplic.**")
+hcols[7].write("**Excluir**")
 
 itens_para_envio = []
 
-# Loop desenhando os campos baseados no st.session_state
 for item in st.session_state.itens:
     uid = item['id']
-    cols = st.columns([2.5, 1, 1, 1, 1, 0.5, 0.5])
+    cols = st.columns([2.5, 1, 1, 1, 1, 0.4, 0.4, 0.4])
     
-    # Text Inputs e Number Inputs salvam de volta no dicionário do item
     item['nome'] = cols[0].text_input("Nome", value=item['nome'], key=f"n_{uid}", label_visibility="collapsed")
     item['m1'] = cols[1].number_input("M1", min_value=1, value=item['m1'], key=f"m1_{uid}", label_visibility="collapsed")
     item['m2'] = cols[2].number_input("M2", min_value=1, value=item['m2'], key=f"m2_{uid}", label_visibility="collapsed")
     item['m3'] = cols[3].number_input("M3", min_value=1, value=item['m3'], key=f"m3_{uid}", label_visibility="collapsed")
     item['peso'] = cols[4].number_input("Peso", min_value=1, value=item['peso'], key=f"p_{uid}", label_visibility="collapsed")
     
-    # Botões de Ação
-    cols[5].button("📋", key=f"dup_{uid}", help="Duplicar este item", on_click=duplicate_item_cb, args=(uid,))
-    cols[6].button("❌", key=f"rem_{uid}", help="Remover este item", on_click=remove_item_cb, args=(uid,))
+    # Botões
+    cols[5].button("📥", key=f"tosuite_{uid}", help="Enviar para a Suíte", on_click=to_suite_cb, args=(uid,))
+    cols[6].button("📋", key=f"dup_{uid}", help="Duplicar item", on_click=duplicate_item_cb, args=(uid,))
+    cols[7].button("❌", key=f"rem_{uid}", help="Remover item", on_click=remove_item_cb, args=(uid,))
     
-    # Calcula as dimensões finais para a simulação com base na proteção
     if tipo_protecao == "Individual (por item)":
         dimensoes = sorted([item['m1'] + (2*espessura_protecao), item['m2'] + (2*espessura_protecao), item['m3'] + (2*espessura_protecao)], reverse=True)
     else:
         dimensoes = sorted([item['m1'], item['m2'], item['m3']], reverse=True)
         
-    itens_para_envio.append({
-        'nome': item['nome'], 
-        'x': dimensoes[0], 
-        'y': dimensoes[1], 
-        'z': dimensoes[2], 
-        'peso': item['peso']
-    })
+    itens_para_envio.append({'nome': item['nome'], 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': item['peso']})
 
-# Botão para adicionar item novo no final da lista
-st.button("➕ Adicionar Novo Produto", on_click=add_item_cb)
+st.button("➕ Adicionar Novo Produto para Envio", on_click=add_item_cb)
 
+# --- ÁREA DA SUÍTE (ESTOQUE) ---
+st.divider()
+st.subheader("📥 Minha Suíte (Estoque)")
+st.write("*(Deixe seus produtos guardados aqui. Exporte para não perder na próxima visita!)*")
+
+if not st.session_state.suite:
+    st.info("Sua suíte está vazia. Você pode adicionar itens diretamente aqui ou enviá-los da lista de envio acima usando o botão 📥.")
+else:
+    scols_h = st.columns([2.5, 1, 1, 1, 1, 0.8, 0.4])
+    scols_h[0].write("**Nome do Produto**")
+    
+    for item in st.session_state.suite:
+        uid = item['id']
+        cols = st.columns([2.5, 1, 1, 1, 1, 0.8, 0.4])
+        
+        item['nome'] = cols[0].text_input("Nome", value=item['nome'], key=f"sn_{uid}", label_visibility="collapsed")
+        item['m1'] = cols[1].number_input("M1", min_value=1, value=item['m1'], key=f"sm1_{uid}", label_visibility="collapsed")
+        item['m2'] = cols[2].number_input("M2", min_value=1, value=item['m2'], key=f"sm2_{uid}", label_visibility="collapsed")
+        item['m3'] = cols[3].number_input("M3", min_value=1, value=item['m3'], key=f"sm3_{uid}", label_visibility="collapsed")
+        item['peso'] = cols[4].number_input("Peso", min_value=1, value=item['peso'], key=f"sp_{uid}", label_visibility="collapsed")
+        
+        cols[5].button("⬆️ Enviar", key=f"fromsuite_{uid}", help="Mover para Envio", on_click=from_suite_cb, args=(uid,))
+        cols[6].button("❌", key=f"srem_{uid}", help="Remover da Suíte", on_click=remove_suite_cb, args=(uid,))
+
+cols_acoes_suite = st.columns([2, 2, 2, 4])
+cols_acoes_suite[0].button("➕ Novo Item na Suíte", on_click=add_suite_item_cb)
+
+# BACKUP DA SUÍTE (JSON)
+suite_json = json.dumps(st.session_state.suite)
+cols_acoes_suite[1].download_button(label="💾 Baixar Suíte", data=suite_json, file_name="minha_suite.json", mime="application/json", help="Baixe sua suíte para carregar no futuro.")
+
+with st.expander("📂 Carregar Suíte Salva (Backup)"):
+    arquivo_up = st.file_uploader("Selecione o arquivo minha_suite.json", type="json")
+    if arquivo_up is not None:
+        try:
+            dados_carregados = json.load(arquivo_up)
+            for item in dados_carregados:
+                item['id'] = st.session_state.next_id
+                st.session_state.next_id += 1
+                st.session_state.suite.append(item)
+            st.success("Suíte carregada com sucesso! Feche esta caixa para continuar.")
+        except:
+            st.error("Erro ao ler o arquivo. Certifique-se de que é o arquivo .json baixado daqui.")
+
+
+# --- CÁLCULO ---
 st.divider()
 
 if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_container_width=True):
@@ -462,12 +512,7 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
             resultado['mod'] = mod
             resultados_calculados.append(resultado)
             
-    # Ordem: Menos Rejeitados -> Evita EMS -> Mais Barato
-    resultados_calculados.sort(key=lambda x: (
-        x['qtd_rejeitados'], 
-        1 if x['mod'] == 'EMS' else 0, 
-        x['custo_total']
-    ))
+    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], 1 if x['mod'] == 'EMS' else 0, x['custo_total']))
     
     if not resultados_calculados:
         st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis.")
@@ -479,7 +524,7 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
         
         with tab_melhor:
             if melhor_opcao['mod'] == 'EMS':
-                st.warning("⚠️ **Aviso:** EMS foi selecionado como a melhor (ou única) opção capaz de levar esta quantidade/tamanho de itens, mas lembre-se que a fiscalização tende a ser mais rigorosa.")
+                st.warning("⚠️ **Aviso:** EMS foi selecionado como a melhor (ou única) opção, mas lembre-se que a fiscalização tende a ser mais rigorosa.")
                 
             st.header(f"✨ A Mais Vantajosa: {melhor_opcao['mod']}")
             exibir_resultado_modalidade(melhor_opcao['mod'], melhor_opcao, tipo_servico, taxa_fixa)
@@ -491,4 +536,4 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
                     exibir_resultado_modalidade(op['mod'], op, tipo_servico, taxa_fixa)
                     st.write("---")
             else:
-                st.write("Não há outras opções viáveis para este conjunto de itens (limite de tamanho/peso excedido nas outras modalidades).")
+                st.write("Não há outras opções viáveis para este conjunto de itens.")
