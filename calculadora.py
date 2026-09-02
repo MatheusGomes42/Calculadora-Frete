@@ -47,6 +47,48 @@ def estimar_frete_jpy(modalidade, peso_g):
         else: return 20100 + (math.ceil((peso_g - 6000) / 1000) * 2400)
     return None
 
+def calcular_taxa_servico(peso_g, modalidade, servico):
+    """Calcula a taxa baseada na tabela da imagem"""
+    if servico == "Nenhum": return 0
+    
+    if servico == "Caixa do Tesouro":
+        if peso_g <= 500:
+            if modalidade == 'ePacket': return 800
+            return 400
+        elif peso_g <= 1000:
+            if modalidade == 'ePacket': return 1100
+            return 800
+        elif peso_g <= 1500:
+            if modalidade == 'ePacket': return 1400
+            elif modalidade == 'EMS': return 1600
+            else: return 1200
+        elif peso_g <= 2000:
+            if modalidade == 'ePacket': return 1800
+            elif modalidade == 'EMS': return 1800
+            else: return 2000
+        elif peso_g <= 4000: return 4000
+        elif peso_g <= 5000: return 4000 if modalidade == 'EMS' else 6000
+        elif peso_g <= 6000: return 6000
+        elif peso_g <= 8000: return 6000 if modalidade == 'EMS' else 7000
+        elif peso_g <= 10000: return 6000 if modalidade == 'EMS' else 8000
+        elif peso_g <= 15000: return 8000
+        elif peso_g <= 20000: return 10000
+        elif peso_g <= 30000: return 15000 if modalidade == 'EMS' else 10000
+        
+    elif servico == "Gato Preto":
+        if modalidade == 'ePacket':
+            if peso_g <= 2000: return 1600
+        elif modalidade == 'Air Parcel':
+            if peso_g <= 2000: return 2000
+            elif peso_g <= 3000: return 3000
+            elif peso_g <= 4000: return 4000
+            elif peso_g <= 6000: return 5000
+            elif peso_g <= 8000: return 6000
+            elif peso_g <= 15000: return 7000
+            elif peso_g <= 30000: return 9000
+    
+    return 0
+
 # --- MOTOR DE EMPACOTAMENTO 3D ---
 
 def check_overlap(pos, dim, placed_items):
@@ -134,7 +176,7 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                 
     return {'caixas': caixas, 'rejeitados': rejeitados}
 
-def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx):
+def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, servico, taxa_fixa):
     heuristics = [
         sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
         sorted(itens, key=lambda i: i['peso'], reverse=True),
@@ -157,11 +199,14 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
         cost = 0
         valid = True
         for cx in result['caixas']:
-            cx_cost = estimar_frete_jpy(modalidade, cx['peso_total'])
-            if cx_cost is None:
+            cx_frete = estimar_frete_jpy(modalidade, cx['peso_total'])
+            if cx_frete is None:
                 valid = False
                 break
-            cost += cx_cost
+            
+            # Cálculo otimizador considerando as taxas
+            cx_taxa = calcular_taxa_servico(cx['peso_total'], modalidade, servico)
+            cost += (cx_frete + cx_taxa + taxa_fixa)
             
         if valid and cost < best_cost:
             best_cost = cost
@@ -247,9 +292,45 @@ def gerar_grafico_3d_novo(caixa_data):
     )
     return fig
 
+# --- FUNÇÃO AUXILIAR DE EXIBIÇÃO ---
+
+def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
+    caixas_geradas = resultado['caixas']
+    itens_rejeitados = resultado['rejeitados']
+    custo_total_jpy = resultado['custo_total']
+    
+    if itens_rejeitados:
+        nomes_rejeitados = ", ".join([i['nome'] for i in itens_rejeitados])
+        st.warning(f"🚫 **Atenção:** Os seguintes itens excedem os limites do **{mod}**: **{nomes_rejeitados}**")
+    
+    st.success(f"Total de caixas necessárias: {len(caixas_geradas)}")
+    
+    for idx, caixa in enumerate(caixas_geradas):
+        nomes_conteudo = [p['item']['nome'] for p in caixa['placed_items']]
+        
+        volumetria = caixa['x'] + 2*(caixa['y']+caixa['z']) if mod != 'ePacket' else caixa['x']+caixa['y']+caixa['z']
+        
+        frete_base = estimar_frete_jpy(mod, caixa['peso_total'])
+        taxa_servico = calcular_taxa_servico(caixa['peso_total'], mod, tipo_servico)
+        custo_caixa = frete_base + taxa_servico + taxa_fixa
+        
+        texto_frete = f"¥ {custo_caixa:,.0f} (Frete: ¥{frete_base} | Serv: ¥{taxa_servico} | Fixo: ¥{taxa_fixa})"
+        
+        with st.expander(f"📦 Caixa {idx+1} ({len(caixa['placed_items'])} itens) | Peso: {caixa['peso_total']}g | Total: {texto_frete}"):
+            st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
+            st.write(f"**Peso Líquido dos Itens:** {caixa['peso_itens']}g | **Peso da Caixa Vazia:** {peso_caixa}g")
+            st.write(f"**Dimensões Finais Externas:** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
+            st.write(f"**Volumetria Regra Postal:** {volumetria}mm")
+            
+            figura_grafico = gerar_grafico_3d_novo(caixa)
+            st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}_{random.randint(1,10000)}")
+
+    st.info(f"**Custo Total Estimado ({mod} c/ taxas): ¥ {custo_total_jpy:,.0f}**")
+
+
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v3.3", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v3.4", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
@@ -258,9 +339,8 @@ st.sidebar.header("🛠️ Configurações da Caixa")
 peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50, help="Será somado ao peso final dos itens.")
 espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1, help="Espessura da parede da caixa.")
 
-# CÁLCULO DA TRAVA DINÂMICA DE VOLUMETRIA (Matemática exata do papelão)
-overhead_epacket = espessura_caixa * 6   # X + Y + Z (2 paredes cada)
-overhead_parcel = espessura_caixa * 10   # X + 2Y + 2Z (Ganha peso duplo nas contas laterais)
+overhead_epacket = espessura_caixa * 6   
+overhead_parcel = espessura_caixa * 10   
 
 max_ui_epacket = 900 - overhead_epacket
 max_ui_air = 2000 - overhead_parcel
@@ -269,7 +349,6 @@ max_ui_ems = 3000 - overhead_parcel
 st.sidebar.divider()
 st.sidebar.header("🫧 Plástico Bolha e Proteção")
 
-# --- ALTERAÇÃO AQUI: O step passou de 5 para 1 ---
 espessura_protecao = st.sidebar.slider("Espessura da Proteção (mm)", 0, 50, 10, 1, help="Camada de plástico bolha/jornal.")
 
 tipo_protecao = st.sidebar.radio("Como aplicar a proteção?", 
@@ -278,8 +357,21 @@ tipo_protecao = st.sidebar.radio("Como aplicar a proteção?",
 )
 
 st.sidebar.divider()
+st.sidebar.header("📋 Taxas Adicionais (Por Caixa)")
+
+tipo_servico = st.sidebar.selectbox(
+    "Taxa de Serviço (Tabela)", 
+    ["Nenhum", "Caixa do Tesouro", "Gato Preto"]
+)
+
+taxa_fixa = st.sidebar.number_input(
+    "Taxa Fixa Adicional (¥)", 
+    min_value=0, value=0, step=100,
+    help="Valor somado a cada caixa gerada."
+)
+
+st.sidebar.divider()
 st.sidebar.header("📏 Limites Volumétricos Úteis")
-st.sidebar.markdown("*(Trava automática para evitar criar caixas que os Correios recusem)*")
 
 limite_epacket_interno = st.sidebar.number_input(
     "Limite Útil ePacket (mm)", 
@@ -330,62 +422,58 @@ for i in range(num_figures):
 
 st.divider()
 
-if st.button("Calcular Empacotamento Inteligente", type="primary", use_container_width=True):
+if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_container_width=True):
     modalidades = ['ePacket', 'Air Parcel', 'EMS']
     tipo_prot_str = "Individual" if "Individual" in tipo_protecao else "Conjunta"
     
-    # Adicionando o papelão de volta ao "Limite Útil" do usuário para o sistema criar a caixa real corretamente
     limite_ext_epacket = limite_epacket_interno + overhead_epacket
     limite_ext_air = limite_air_interno + overhead_parcel
     limite_ext_ems = limite_ems_interno + overhead_parcel
     
+    resultados_calculados = []
+    
+    # 1. Processar todas as modalidades e calcular os custos totais
     for mod in modalidades:
-        st.subheader(f"✈️ Frete: {mod}")
-        
         resultado = empacotar_heuristics(
             itens_para_envio, mod, 
             limite_ext_air, limite_ext_ems, limite_ext_epacket, 
-            tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa
+            tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa,
+            tipo_servico, taxa_fixa
         )
         
-        if isinstance(resultado, str):
-            st.error(resultado)
-        else:
-            caixas_geradas = resultado['caixas']
-            itens_rejeitados = resultado['rejeitados']
+        if not isinstance(resultado, str) and len(resultado['caixas']) > 0:
             custo_total_jpy = 0
+            for cx in resultado['caixas']:
+                f_base = estimar_frete_jpy(mod, cx['peso_total'])
+                t_serv = calcular_taxa_servico(cx['peso_total'], mod, tipo_servico)
+                custo_total_jpy += (f_base + t_serv + taxa_fixa)
+                
+            resultado['custo_total'] = custo_total_jpy
+            resultado['qtd_rejeitados'] = len(resultado['rejeitados'])
+            resultado['mod'] = mod
+            resultados_calculados.append(resultado)
             
-            if itens_rejeitados:
-                nomes_rejeitados = ", ".join([i['nome'] for i in itens_rejeitados])
-                st.warning(f"🚫 **Atenção:** Os seguintes itens ignorados excedem os limites postais de tamanho/peso do **{mod}**, mesmo se enviados sozinhos: **{nomes_rejeitados}**")
+    # 2. Ordenar para achar a melhor (Menos rejeitados primeiro, depois menor custo)
+    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['custo_total']))
+    
+    # 3. Exibir na Interface
+    if not resultados_calculados:
+        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis.")
+    else:
+        melhor_opcao = resultados_calculados[0]
+        outras_opcoes = resultados_calculados[1:]
+        
+        tab_melhor, tab_outras = st.tabs(["🏆 Melhor Opção", "📦 Outras Opções"])
+        
+        with tab_melhor:
+            st.header(f"✨ A Mais Vantajosa: {melhor_opcao['mod']}")
+            exibir_resultado_modalidade(melhor_opcao['mod'], melhor_opcao, tipo_servico, taxa_fixa)
             
-            if caixas_geradas:
-                st.success(f"Total de caixas necessárias para os itens compatíveis: {len(caixas_geradas)}")
-                
-                for idx, caixa in enumerate(caixas_geradas):
-                    nomes_conteudo = [p['item']['nome'] for p in caixa['placed_items']]
-                    
-                    volumetria = caixa['x'] + 2*(caixa['y']+caixa['z']) if mod != 'ePacket' else caixa['x']+caixa['y']+caixa['z']
-                    valor_frete = estimar_frete_jpy(mod, caixa['peso_total'])
-                    
-                    if valor_frete:
-                        custo_total_jpy += valor_frete
-                        texto_frete = f"¥ {valor_frete:,.0f}"
-                    else:
-                        texto_frete = "Erro no cálculo"
-                    
-                    with st.expander(f"📦 Caixa {idx+1} ({len(caixa['placed_items'])} itens) | Peso Total: {caixa['peso_total']}g | Frete: {texto_frete}"):
-                        st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
-                        st.write(f"**Peso Líquido dos Itens:** {caixa['peso_itens']}g | **Peso da Caixa Vazia:** {peso_caixa}g")
-                        st.write(f"**Dimensões Finais Externas (Caixa Fechada):** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
-                        st.write(f"**Volumetria Regra Postal:** {volumetria}mm")
-                        
-                        figura_grafico = gerar_grafico_3d_novo(caixa)
-                        st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod}_{idx}")
-                
-                if custo_total_jpy > 0:
-                    st.info(f"**Custo Total Estimado ({mod}): ¥ {custo_total_jpy:,.0f}**")
-            elif not caixas_geradas and itens_rejeitados:
-                st.error(f"Nenhum dos itens selecionados pode ser enviado via {mod}.")
-                
-        st.write("---")
+        with tab_outras:
+            if outras_opcoes:
+                for op in outras_opcoes:
+                    st.subheader(f"✈️ Alternativa: {op['mod']}")
+                    exibir_resultado_modalidade(op['mod'], op, tipo_servico, taxa_fixa)
+                    st.write("---")
+            else:
+                st.write("Não há outras opções viáveis para este conjunto de itens.")
