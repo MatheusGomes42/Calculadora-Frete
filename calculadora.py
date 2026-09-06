@@ -5,6 +5,7 @@ import itertools
 import random
 import csv
 import io
+import re
 
 # --- LÓGICA MATEMÁTICA E REGRAS DE NEGÓCIO ---
 
@@ -86,6 +87,23 @@ def calcular_taxa_servico(peso_g, modalidade, servico):
     
     return 0
 
+def extrair_dimensoes_texto(texto):
+    # Nova regex que aceita "cm" no final, ou "mm" logo após cada número
+    padrao = r'([\d\.,]+)\s*(?:cm|mm)?\s*[xX*]\s*([\d\.,]+)\s*(?:cm|mm)?\s*[xX*]\s*([\d\.,]+)\s*(cm|mm)[\s\S]*?([\d\.,]+)\s*g'
+    match = re.search(padrao, texto, re.IGNORECASE)
+    if match:
+        d1 = float(match.group(1).replace(',', '.'))
+        d2 = float(match.group(2).replace(',', '.'))
+        d3 = float(match.group(3).replace(',', '.'))
+        unidade = match.group(4).lower()
+        peso = float(match.group(5).replace(',', '.'))
+        
+        if unidade == 'cm':
+            d1, d2, d3 = d1 * 10, d2 * 10, d3 * 10
+            
+        return int(d1), int(d2), int(d3), int(peso)
+    return None
+
 # --- MOTOR DE EMPACOTAMENTO 3D ---
 def check_overlap(pos, dim, placed_items):
     x1, y1, z1 = pos
@@ -108,7 +126,7 @@ def get_candidate_points(placed_items):
     pts.sort(key=lambda pt: (pt[2], pt[1], pt[0]))
     return pts
 
-def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx):
+def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, caixa_padrao=None):
     caixas = [] 
     rejeitados = []
     
@@ -137,6 +155,11 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                         bounds = sorted([new_max_x + extra_dim, new_max_y + extra_dim, new_max_z + extra_dim], reverse=True)
                         new_peso_total = caixa['peso_itens'] + item['peso'] + peso_cx
                         
+                        if caixa_padrao:
+                            cx_p_bounds = sorted([caixa_padrao['x'], caixa_padrao['y'], caixa_padrao['z']], reverse=True)
+                            if bounds[0] > cx_p_bounds[0] or bounds[1] > cx_p_bounds[1] or bounds[2] > cx_p_bounds[2] or new_peso_total > caixa_padrao['peso_max']:
+                                continue
+                        
                         if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
                             vol_temp = bounds[0] + 2*(bounds[1]+bounds[2]) if modalidade != 'ePacket' else bounds[0]+bounds[1]+bounds[2]
                             if vol_temp < menor_vol_incremento:
@@ -149,6 +172,10 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
             if melhor_pos is not None:
                 caixa['placed_items'].append({'item': item, 'pos': melhor_pos, 'dim': melhor_dim})
                 caixa['x'], caixa['y'], caixa['z'] = caixa['temp_bounds']
+                if caixa_padrao:
+                    cx_p_bounds = sorted([caixa_padrao['x'], caixa_padrao['y'], caixa_padrao['z']], reverse=True)
+                    caixa['x'], caixa['y'], caixa['z'] = cx_p_bounds
+                    
                 caixa['bound_x'], caixa['bound_y'], caixa['bound_z'] = caixa['temp_maxes']
                 caixa['peso_itens'] += item['peso']
                 caixa['peso_total'] = caixa['peso_itens'] + peso_cx
@@ -159,11 +186,22 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
             bounds = sorted([dim_originais[0] + extra_dim, dim_originais[1] + extra_dim, dim_originais[2] + extra_dim], reverse=True)
             new_peso_total = item['peso'] + peso_cx
             
+            if caixa_padrao:
+                cx_p_bounds = sorted([caixa_padrao['x'], caixa_padrao['y'], caixa_padrao['z']], reverse=True)
+                if bounds[0] > cx_p_bounds[0] or bounds[1] > cx_p_bounds[1] or bounds[2] > cx_p_bounds[2] or new_peso_total > caixa_padrao['peso_max']:
+                    rejeitados.append(item)
+                    continue
+            
             if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
+                cx_x, cx_y, cx_z = bounds
+                if caixa_padrao:
+                    cx_p_bounds = sorted([caixa_padrao['x'], caixa_padrao['y'], caixa_padrao['z']], reverse=True)
+                    cx_x, cx_y, cx_z = cx_p_bounds
+                    
                 caixas.append({
                     'placed_items': [{'item': item, 'pos': (0,0,0), 'dim': dim_originais}],
                     'bound_x': dim_originais[0], 'bound_y': dim_originais[1], 'bound_z': dim_originais[2],
-                    'x': bounds[0], 'y': bounds[1], 'z': bounds[2],
+                    'x': cx_x, 'y': cx_y, 'z': cx_z,
                     'peso_itens': item['peso'],
                     'peso_total': new_peso_total
                 })
@@ -172,7 +210,7 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                 
     return {'caixas': caixas, 'rejeitados': rejeitados}
 
-def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, servico, taxa_fixa):
+def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, servico, taxa_fixa, caixa_padrao=None):
     heuristics = [
         sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
         sorted(itens, key=lambda i: i['peso'], reverse=True),
@@ -190,7 +228,7 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
     best_error = "Nenhum item atende aos requisitos desta modalidade."
     
     for heur_itens in heuristics:
-        result = run_packing(heur_itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx)
+        result = run_packing(heur_itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, caixa_padrao)
         
         cost = 0
         valid = True
@@ -286,14 +324,14 @@ def gerar_grafico_3d_novo(caixa_data):
     )
     return fig
 
-def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa):
+def exibir_resultado_modalidade(mod, resultado, tipo_servico, taxa_fixa, peso_caixa):
     caixas_geradas = resultado['caixas']
     itens_rejeitados = resultado['rejeitados']
     custo_total_jpy = resultado['custo_total']
     
     if itens_rejeitados:
         nomes_rejeitados = ", ".join([i['nome'] for i in itens_rejeitados])
-        st.warning(f"🚫 **Atenção:** Os seguintes itens excedem os limites do **{mod}**: **{nomes_rejeitados}**")
+        st.warning(f"🚫 **Atenção:** Os seguintes itens excedem os limites do **{mod}** (ou da caixa padrão): **{nomes_rejeitados}**")
     
     st.success(f"Total de caixas necessárias: {len(caixas_geradas)}")
     
@@ -364,11 +402,11 @@ def add_suite_item_cb():
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v5.0", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v6.0", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
-st.sidebar.header("🛠️ Configurações da Caixa")
+st.sidebar.header("🛠️ Configurações da Caixa Genérica")
 peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50)
 espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1)
 
@@ -377,6 +415,19 @@ overhead_parcel = espessura_caixa * 10
 max_ui_epacket = 900 - overhead_epacket
 max_ui_air = 2000 - overhead_parcel
 max_ui_ems = 3000 - overhead_parcel
+
+st.sidebar.divider()
+st.sidebar.header("📦 Caixas Padronizadas (Proxy)")
+usar_caixa_padrao = st.sidebar.checkbox("Forçar uso de caixa padrão (Proxy)")
+caixa_padrao_config = None
+
+if usar_caixa_padrao:
+    st.sidebar.caption("Se ativado, os itens serão testados estritamente contra as dimensões desta caixa.")
+    cx_x = st.sidebar.number_input("Comprimento Máx (mm)", value=400, step=10)
+    cx_y = st.sidebar.number_input("Largura Máx (mm)", value=300, step=10)
+    cx_z = st.sidebar.number_input("Altura Máx (mm)", value=200, step=10)
+    cx_peso = st.sidebar.number_input("Peso Máximo Total da Caixa (g)", value=30000, step=500)
+    caixa_padrao_config = {'x': cx_x, 'y': cx_y, 'z': cx_z, 'peso_max': cx_peso}
 
 st.sidebar.divider()
 st.sidebar.header("🫧 Plástico Bolha e Proteção")
@@ -396,6 +447,23 @@ limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=
 
 
 # --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ENVIO) ---
+st.subheader("⚡ Adição Rápida (Copia e Cola)")
+st.markdown("Cole o texto de sites como **Hobby Search, HobbyLink Japan ou Mandarake**. Ex: `13.2 x 13.2 x 26 cm / 370g` ou `340mm x 325mm x 240mm / 1200g`")
+col_txt, col_btn = st.columns([4, 1])
+texto_rapido = col_txt.text_input("Texto com as dimensões e peso", key="input_rapido", label_visibility="collapsed")
+if col_btn.button("➕ Extrair e Adicionar"):
+    if texto_rapido.strip():
+        dim = extrair_dimensoes_texto(texto_rapido)
+        if dim:
+            m1, m2, m3, p = dim
+            st.session_state.itens.append({'id': st.session_state.next_id, 'nome': f'Item Extraído {st.session_state.next_id}', 'm1': m1, 'm2': m2, 'm3': m3, 'peso': p})
+            st.session_state.next_id += 1
+            st.success("Item extraído e adicionado com sucesso!")
+            st.rerun()
+        else:
+            st.error("Não foi possível identificar as medidas. Certifique-se de incluir as 3 dimensões e o peso (ex: 31.1 x 15.4 x 14.1 cm / 514g).")
+
+st.divider()
 st.subheader("🛒 Itens para Envio (Caixa Atual)")
 
 hcols = st.columns([2.5, 1, 1, 1, 1, 0.4, 0.4, 0.4])
@@ -439,7 +507,6 @@ st.divider()
 st.subheader("📥 Minha Suíte (Estoque)")
 st.write("*(Deixe seus produtos guardados aqui. Baixe em Excel/CSV para guardar e carregar depois!)*")
 
-# Criação do arquivo CSV em memória para o botão de download
 csv_output = io.StringIO()
 writer = csv.DictWriter(csv_output, fieldnames=["nome", "m1", "m2", "m3", "peso"])
 writer.writeheader()
@@ -450,36 +517,28 @@ cols_acoes_suite = st.columns([2.5, 2, 4])
 cols_acoes_suite[0].button("➕ Novo Item Direto na Suíte", on_click=add_suite_item_cb)
 cols_acoes_suite[1].download_button(
     label="💾 Baixar Suíte (.CSV)", 
-    data=csv_output.getvalue().encode('utf-8-sig'), # utf-8-sig ajuda o excel a ler acentos melhor
+    data=csv_output.getvalue().encode('utf-8-sig'), 
     file_name="minha_suite.csv", 
     mime="text/csv", 
     help="Baixe sua suíte para abrir no Excel ou carregar no futuro."
 )
 
-# Upload de arquivo CSV
 with st.expander("📂 Carregar Suíte Salva (Backup .CSV)"):
     arquivo_up = st.file_uploader("Selecione o arquivo .csv modificado ou salvo anteriormente", type=["csv"])
     
-    # Reseta a flag se o usuário remover o arquivo no "X"
     if arquivo_up is None:
         st.session_state.last_uploaded = None
         
     if arquivo_up is not None:
-        # Só processa se for um arquivo novo (evita que Streamlit adicione os itens em loop)
         if 'last_uploaded' not in st.session_state or st.session_state.last_uploaded != arquivo_up.name:
             try:
-                content = arquivo_up.getvalue().decode('utf-8-sig') # Compatível com Excel
-                
-                # Identifica dinamicamente se o delimitador é vírgula ou ponto-e-vírgula
+                content = arquivo_up.getvalue().decode('utf-8-sig')
                 primeira_linha = content.split('\n')[0]
                 delimiter = ';' if ';' in primeira_linha else ','
-                
                 reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
                 
                 for row in reader:
-                    # Garantir que lê as colunas mesmo que o usuário bagunce letras maiúsculas/minúsculas
                     row_lower = {k.strip().lower(): v for k, v in row.items() if k}
-                    
                     st.session_state.suite.append({
                         'id': st.session_state.next_id,
                         'nome': row_lower.get('nome', 'Item Importado').strip(),
@@ -492,12 +551,10 @@ with st.expander("📂 Carregar Suíte Salva (Backup .CSV)"):
                     
                 st.session_state.last_uploaded = arquivo_up.name
                 st.success("Suíte carregada com sucesso! Feche esta guia.")
-                # st.rerun() faria um reload forçado, mas a mecânica da UI do Streamlit atualizará a lista na próxima interação
                 
             except Exception as e:
                 st.error(f"Erro ao ler o arquivo CSV. Detalhes: {e}")
 
-# Renderizar lista da Suíte
 if not st.session_state.suite:
     st.info("Sua suíte está vazia. Você pode adicionar itens, carregar um CSV ou enviar da lista de envio usando o botão 📥.")
 else:
@@ -536,7 +593,7 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
             itens_para_envio, mod, 
             limite_ext_air, limite_ext_ems, limite_ext_epacket, 
             tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa,
-            tipo_servico, taxa_fixa
+            tipo_servico, taxa_fixa, caixa_padrao_config
         )
         
         if not isinstance(resultado, str) and len(resultado['caixas']) > 0:
@@ -554,7 +611,7 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
     resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], 1 if x['mod'] == 'EMS' else 0, x['custo_total']))
     
     if not resultados_calculados:
-        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis.")
+        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis dadas as restrições atuais.")
     else:
         melhor_opcao = resultados_calculados[0]
         outras_opcoes = resultados_calculados[1:]
@@ -566,13 +623,13 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
                 st.warning("⚠️ **Aviso:** EMS foi selecionado como a melhor (ou única) opção, mas lembre-se que a fiscalização tende a ser mais rigorosa.")
                 
             st.header(f"✨ A Mais Vantajosa: {melhor_opcao['mod']}")
-            exibir_resultado_modalidade(melhor_opcao['mod'], melhor_opcao, tipo_servico, taxa_fixa)
+            exibir_resultado_modalidade(melhor_opcao['mod'], melhor_opcao, tipo_servico, taxa_fixa, peso_caixa)
             
         with tab_outras:
             if outras_opcoes:
                 for op in outras_opcoes:
                     st.subheader(f"✈️ Alternativa: {op['mod']}")
-                    exibir_resultado_modalidade(op['mod'], op, tipo_servico, taxa_fixa)
+                    exibir_resultado_modalidade(op['mod'], op, tipo_servico, taxa_fixa, peso_caixa)
                     st.write("---")
             else:
-                st.write("Não há outras opções viáveis para este conjunto de itens.")
+                st.write("Não há outras opções viáveis para este conjunto de itens e limites.")
