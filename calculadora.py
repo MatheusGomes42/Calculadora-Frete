@@ -454,20 +454,13 @@ def add_suite_item_cb():
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v7.1", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v7.2", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("🛃 Impostos e Conversão")
 cotacao_jpy = st.sidebar.number_input("Cotação JPY para BRL (R$)", value=0.038, format="%.4f")
 incluir_frete_imposto = st.sidebar.checkbox("Incluir frete na base de cálculo (Regra Padrão)", value=True, help="A Receita Federal cobra o imposto sobre o Valor do Produto + Valor do Frete.")
-
-st.sidebar.divider()
-st.sidebar.header("🧠 Estratégia de Encaixe")
-estrategia_escolhida = st.sidebar.radio(
-    "Regra do Algoritmo:", 
-    ["Automático (Testar Ambas)", "Forçar Cubo (Melhor p/ itens iguais)", "Regra Postal (Melhor p/ itens variados)"]
-)
 
 st.sidebar.divider()
 st.sidebar.header("🛠️ Configurações da Caixa Genérica")
@@ -482,14 +475,14 @@ max_ui_ems = 3000 - overhead_parcel
 
 st.sidebar.divider()
 st.sidebar.header("📦 Caixas Padronizadas (Proxy)")
-cx_x = st.sidebar.number_input("Comprimento Máx (mm)", value=400, step=10)
-cx_y = st.sidebar.number_input("Largura Máx (mm)", value=300, step=10)
-cx_z = st.sidebar.number_input("Altura Máx (mm)", value=200, step=10)
-cx_peso = st.sidebar.number_input("Peso Máximo Total (g)", value=30000, step=500)
-usar_caixa_padrao = st.sidebar.checkbox("Ativar limites da caixa padrão", help="Se ativado, qualquer caixa que ultrapasse estas dimensões será barrada.")
+usar_caixa_padrao = st.sidebar.checkbox("Forçar uso de caixa padrão (Proxy)", help="Se ativado, qualquer caixa que ultrapasse estas dimensões será barrada.")
 
 caixa_padrao_config = None
 if usar_caixa_padrao:
+    cx_x = st.sidebar.number_input("Comprimento Máx (mm)", value=400, step=10)
+    cx_y = st.sidebar.number_input("Largura Máx (mm)", value=300, step=10)
+    cx_z = st.sidebar.number_input("Altura Máx (mm)", value=200, step=10)
+    cx_peso = st.sidebar.number_input("Peso Máximo Total (g)", value=30000, step=500)
     caixa_padrao_config = {'x': cx_x, 'y': cx_y, 'z': cx_z, 'peso_max': cx_peso}
 
 st.sidebar.divider()
@@ -632,13 +625,7 @@ st.divider()
 
 if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_container_width=True):
     modalidades = ['ePacket', 'Air Parcel', 'EMS']
-    
-    if "Automático" in estrategia_escolhida:
-        estrategias_ativas = ["Regra Postal", "Forçar Cubo"]
-    elif "Cubo" in estrategia_escolhida:
-        estrategias_ativas = ["Forçar Cubo"]
-    else:
-        estrategias_ativas = ["Regra Postal"]
+    estrategias_ativas = ["Regra Postal", "Forçar Cubo"]
         
     tipo_prot_str = "Individual" if "Individual" in tipo_protecao else "Conjunta"
     
