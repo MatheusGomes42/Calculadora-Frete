@@ -161,7 +161,10 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                                 continue
                         
                         if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
-                            vol_temp = bounds[0] + 2*(bounds[1]+bounds[2]) if modalidade != 'ePacket' else bounds[0]+bounds[1]+bounds[2]
+                            
+                            # NOVA LÓGICA: Minimiza a soma dos quadrados para forçar um formato cúbico/compacto
+                            vol_temp = (bounds[0] ** 2) + (bounds[1] ** 2) + (bounds[2] ** 2)
+                            
                             if vol_temp < menor_vol_incremento:
                                 menor_vol_incremento = vol_temp
                                 melhor_pos = pt
