@@ -88,7 +88,6 @@ def calcular_taxa_servico(peso_g, modalidade, servico):
     return 0
 
 def extrair_dimensoes_texto(texto):
-    # Nova regex que aceita "cm" no final, ou "mm" logo após cada número
     padrao = r'([\d\.,]+)\s*(?:cm|mm)?\s*[xX*]\s*([\d\.,]+)\s*(?:cm|mm)?\s*[xX*]\s*([\d\.,]+)\s*(cm|mm)[\s\S]*?([\d\.,]+)\s*g'
     match = re.search(padrao, texto, re.IGNORECASE)
     if match:
@@ -126,7 +125,7 @@ def get_candidate_points(placed_items):
     pts.sort(key=lambda pt: (pt[2], pt[1], pt[0]))
     return pts
 
-def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, caixa_padrao=None):
+def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, estrategia, caixa_padrao=None):
     caixas = [] 
     rejeitados = []
     
@@ -162,9 +161,12 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                         
                         if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
                             
-                            # NOVA LÓGICA: Minimiza a soma dos quadrados para forçar um formato cúbico/compacto
-                            vol_temp = (bounds[0] ** 2) + (bounds[1] ** 2) + (bounds[2] ** 2)
-                            
+                            # NOVA LÓGICA DE ESTRATÉGIA APLICADA AQUI
+                            if estrategia == "Forçar Cubo (Melhor para itens iguais)":
+                                vol_temp = (bounds[0] ** 2) + (bounds[1] ** 2) + (bounds[2] ** 2)
+                            else:
+                                vol_temp = bounds[0] + 2*(bounds[1]+bounds[2]) if modalidade != 'ePacket' else bounds[0]+bounds[1]+bounds[2]
+                                
                             if vol_temp < menor_vol_incremento:
                                 menor_vol_incremento = vol_temp
                                 melhor_pos = pt
@@ -213,7 +215,7 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                 
     return {'caixas': caixas, 'rejeitados': rejeitados}
 
-def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, servico, taxa_fixa, caixa_padrao=None):
+def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, servico, taxa_fixa, estrategia, caixa_padrao=None):
     heuristics = [
         sorted(itens, key=lambda i: i['x']*i['y']*i['z'], reverse=True),
         sorted(itens, key=lambda i: i['peso'], reverse=True),
@@ -231,7 +233,7 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
     best_error = "Nenhum item atende aos requisitos desta modalidade."
     
     for heur_itens in heuristics:
-        result = run_packing(heur_itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, caixa_padrao)
+        result = run_packing(heur_itens, modalidade, limite_air, limite_ems, limite_epacket, tipo_prot, esp_prot, esp_cx, peso_cx, estrategia, caixa_padrao)
         
         cost = 0
         valid = True
@@ -443,6 +445,13 @@ tipo_servico = st.sidebar.selectbox("Taxa de Serviço (Tabela)", ["Nenhum", "Cai
 taxa_fixa = st.sidebar.number_input("Taxa Fixa Adicional (¥)", min_value=0, value=0, step=100)
 
 st.sidebar.divider()
+st.sidebar.header("🧠 Estratégia do Algoritmo")
+estrategia_empacotamento = st.sidebar.radio(
+    "Regra de Posicionamento:",
+    ["Regra Postal (Melhor para itens variados)", "Forçar Cubo (Melhor para itens iguais)"]
+)
+
+st.sidebar.divider()
 st.sidebar.header("📏 Limites Volumétricos Úteis")
 limite_epacket_interno = st.sidebar.number_input("Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=min(850, max_ui_epacket), step=10)
 limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
@@ -596,7 +605,7 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
             itens_para_envio, mod, 
             limite_ext_air, limite_ext_ems, limite_ext_epacket, 
             tipo_prot_str, espessura_protecao, espessura_caixa, peso_caixa,
-            tipo_servico, taxa_fixa, caixa_padrao_config
+            tipo_servico, taxa_fixa, estrategia_empacotamento, caixa_padrao_config
         )
         
         if not isinstance(resultado, str) and len(resultado['caixas']) > 0:
