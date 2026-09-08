@@ -454,13 +454,20 @@ def add_suite_item_cb():
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v7.0", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v7.1", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("🛃 Impostos e Conversão")
 cotacao_jpy = st.sidebar.number_input("Cotação JPY para BRL (R$)", value=0.038, format="%.4f")
 incluir_frete_imposto = st.sidebar.checkbox("Incluir frete na base de cálculo (Regra Padrão)", value=True, help="A Receita Federal cobra o imposto sobre o Valor do Produto + Valor do Frete.")
+
+st.sidebar.divider()
+st.sidebar.header("🧠 Estratégia de Encaixe")
+estrategia_escolhida = st.sidebar.radio(
+    "Regra do Algoritmo:", 
+    ["Automático (Testar Ambas)", "Forçar Cubo (Melhor p/ itens iguais)", "Regra Postal (Melhor p/ itens variados)"]
+)
 
 st.sidebar.divider()
 st.sidebar.header("🛠️ Configurações da Caixa Genérica")
@@ -475,14 +482,14 @@ max_ui_ems = 3000 - overhead_parcel
 
 st.sidebar.divider()
 st.sidebar.header("📦 Caixas Padronizadas (Proxy)")
-usar_caixa_padrao = st.sidebar.checkbox("Forçar uso de caixa padrão (Proxy)")
-caixa_padrao_config = None
+cx_x = st.sidebar.number_input("Comprimento Máx (mm)", value=400, step=10)
+cx_y = st.sidebar.number_input("Largura Máx (mm)", value=300, step=10)
+cx_z = st.sidebar.number_input("Altura Máx (mm)", value=200, step=10)
+cx_peso = st.sidebar.number_input("Peso Máximo Total (g)", value=30000, step=500)
+usar_caixa_padrao = st.sidebar.checkbox("Ativar limites da caixa padrão", help="Se ativado, qualquer caixa que ultrapasse estas dimensões será barrada.")
 
+caixa_padrao_config = None
 if usar_caixa_padrao:
-    cx_x = st.sidebar.number_input("Comprimento Máx (mm)", value=400, step=10)
-    cx_y = st.sidebar.number_input("Largura Máx (mm)", value=300, step=10)
-    cx_z = st.sidebar.number_input("Altura Máx (mm)", value=200, step=10)
-    cx_peso = st.sidebar.number_input("Peso Máximo Total (g)", value=30000, step=500)
     caixa_padrao_config = {'x': cx_x, 'y': cx_y, 'z': cx_z, 'peso_max': cx_peso}
 
 st.sidebar.divider()
@@ -494,6 +501,13 @@ st.sidebar.divider()
 st.sidebar.header("📋 Taxas Adicionais (Por Caixa)")
 tipo_servico = st.sidebar.selectbox("Taxa de Serviço (Tabela)", ["Nenhum", "Caixa do Tesouro", "Gato Preto"])
 taxa_fixa = st.sidebar.number_input("Taxa Fixa Adicional (¥)", min_value=0, value=0, step=100)
+
+st.sidebar.divider()
+st.sidebar.header("📏 Limites Volumétricos Úteis")
+# O valor default agora é sempre o MAXIMO permitido pela regra (max_ui_*), para evitar barrar caixas muito grandes sem querer.
+limite_epacket_interno = st.sidebar.number_input("Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=max_ui_epacket, step=10)
+limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=max_ui_air, step=10)
+limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=max_ui_ems, step=10)
 
 
 # --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ENVIO) ---
@@ -530,7 +544,7 @@ itens_para_envio = []
 
 for item in st.session_state.itens:
     uid = item['id']
-    if 'valor' not in item: item['valor'] = 0 # Atualização de estado legado
+    if 'valor' not in item: item['valor'] = 0 
     
     cols = st.columns([2, 0.8, 0.8, 0.8, 0.8, 0.8, 0.4, 0.4, 0.4])
     
@@ -618,18 +632,25 @@ st.divider()
 
 if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_container_width=True):
     modalidades = ['ePacket', 'Air Parcel', 'EMS']
-    estrategias = ["Regra Postal", "Forçar Cubo"]
+    
+    if "Automático" in estrategia_escolhida:
+        estrategias_ativas = ["Regra Postal", "Forçar Cubo"]
+    elif "Cubo" in estrategia_escolhida:
+        estrategias_ativas = ["Forçar Cubo"]
+    else:
+        estrategias_ativas = ["Regra Postal"]
+        
     tipo_prot_str = "Individual" if "Individual" in tipo_protecao else "Conjunta"
     
-    # Adicionando os limites externos via overhead na execução para manter a interface limpa
-    limite_ext_epacket = min(850, max_ui_epacket) + overhead_epacket
-    limite_ext_air = min(1800, max_ui_air) + overhead_parcel
-    limite_ext_ems = min(2800, max_ui_ems) + overhead_parcel
+    # O limite útil + overhead reflete o limite REAL para o qual o algoritmo vai testar as caixas
+    limite_ext_epacket = min(900, limite_epacket_interno + overhead_epacket)
+    limite_ext_air = min(2000, limite_air_interno + overhead_parcel)
+    limite_ext_ems = min(3000, limite_ems_interno + overhead_parcel)
     
     resultados_calculados = []
     
     for mod in modalidades:
-        for est in estrategias:
+        for est in estrategias_ativas:
             resultado = empacotar_heuristics(
                 itens_para_envio, mod, 
                 limite_ext_air, limite_ext_ems, limite_ext_epacket, 
@@ -659,7 +680,7 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
     resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['usa_ems'], len(x['caixas']), x['custo_total']))
     
     if not resultados_calculados:
-        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades.")
+        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades com essas configurações.")
     else:
         melhor_opcao = resultados_calculados[0]
         outras_opcoes = resultados_calculados[1:10] 
