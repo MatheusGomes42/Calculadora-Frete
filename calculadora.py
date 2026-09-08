@@ -160,7 +160,6 @@ def run_packing(itens_ordenados, modalidade, limite_air, limite_ems, limite_epac
                                 continue
                         
                         if atende_limite(bounds[0], bounds[1], bounds[2], new_peso_total, modalidade, limite_air, limite_ems, limite_epacket):
-                            
                             if estrategia == "Forçar Cubo":
                                 vol_temp = (bounds[0] ** 2) + (bounds[1] ** 2) + (bounds[2] ** 2)
                             else:
@@ -237,7 +236,6 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
         cost = 0
         valid = True
         
-        # Otimização Mista com Penalidade Severa para EMS
         for cx in result['caixas']:
             melhor_custo_comparativo = float('inf')
             custo_real_escolhido = 0
@@ -252,8 +250,6 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
                         t_serv = calcular_taxa_servico(cx['peso_total'], mod_teste, servico)
                         custo_real = f_base + t_serv + taxa_fixa
                         
-                        # A MÁGICA AQUI: O EMS leva uma multa de 10 milhões de Ienes no cálculo interno.
-                        # Ele nunca vai vencer do Air Parcel ou ePacket, a menos que seja a única opção possível.
                         custo_comparativo = custo_real if mod_teste != 'EMS' else custo_real + 10000000
                         
                         if custo_comparativo < melhor_custo_comparativo:
@@ -356,7 +352,7 @@ def gerar_grafico_3d_novo(caixa_data):
     )
     return fig
 
-def exibir_resultado_modalidade(mod_display, mod_original, resultado, tipo_servico, taxa_fixa, peso_caixa):
+def exibir_resultado_modalidade(mod_display, mod_original, resultado, tipo_servico, taxa_fixa, peso_caixa, cotacao_jpy, incluir_frete_imposto):
     caixas_geradas = resultado['caixas']
     itens_rejeitados = resultado['rejeitados']
     custo_total_jpy = resultado['custo_total']
@@ -367,8 +363,11 @@ def exibir_resultado_modalidade(mod_display, mod_original, resultado, tipo_servi
     
     st.success(f"Total de caixas necessárias: {len(caixas_geradas)}")
     
+    total_impostos_brl = 0
+    
     for idx, caixa in enumerate(caixas_geradas):
         nomes_conteudo = [p['item']['nome'] for p in caixa['placed_items']]
+        valor_itens_jpy = sum(p['item'].get('valor', 0) for p in caixa['placed_items'])
         mod_caixa = caixa['mod_sugerida']
         
         volumetria = caixa['x'] + 2*(caixa['y']+caixa['z']) if mod_caixa != 'ePacket' else caixa['x']+caixa['y']+caixa['z']
@@ -379,26 +378,46 @@ def exibir_resultado_modalidade(mod_display, mod_original, resultado, tipo_servi
         
         texto_frete = f"¥ {custo_caixa:,.0f} (Frete: ¥{frete_base} | Serv: ¥{taxa_servico} | Fixo: ¥{taxa_fixa})"
         
-        with st.expander(f"📦 Caixa {idx+1} [Via {mod_caixa}] | {len(caixa['placed_items'])} itens | Peso: {caixa['peso_total']}g | Total: {texto_frete}"):
+        # --- CÁLCULO DO IMPOSTO ---
+        base_calculo_jpy = valor_itens_jpy
+        if incluir_frete_imposto:
+            base_calculo_jpy += custo_caixa
+            
+        base_calculo_brl = base_calculo_jpy * cotacao_jpy
+        
+        if valor_itens_jpy > 0:
+            imposto_caixa_brl = (base_calculo_brl * 0.93) + 18.00
+            texto_imposto = f"🚨 **Imposto Estimado (93% + R$18):** R$ {imposto_caixa_brl:,.2f}"
+            total_impostos_brl += imposto_caixa_brl
+        else:
+            texto_imposto = "*(Valores dos produtos não informados para cálculo de imposto)*"
+
+        with st.expander(f"📦 Caixa {idx+1} [Via {mod_caixa}] | {len(caixa['placed_items'])} itens | Peso: {caixa['peso_total']}g | Total Envio: {texto_frete}"):
             st.write(f"**Conteúdo:** {', '.join(nomes_conteudo)}")
             st.write(f"**Peso Líquido dos Itens:** {caixa['peso_itens']}g | **Peso da Caixa Vazia:** {peso_caixa}g")
             st.write(f"**Dimensões Finais Externas:** X={caixa['x']}mm, Y={caixa['y']}mm, Z={caixa['z']}mm")
             st.write(f"**Volumetria Regra Postal ({mod_caixa}):** {volumetria}mm")
+            st.write(f"**Valor Declarado dos Itens:** ¥ {valor_itens_jpy:,.0f}")
+            st.markdown(texto_imposto)
             
             figura_grafico = gerar_grafico_3d_novo(caixa)
             st.plotly_chart(figura_grafico, use_container_width=True, key=f"grafico_{mod_original}_{idx}_{random.randint(1,10000)}")
 
-    st.info(f"**Custo Total Estimado: ¥ {custo_total_jpy:,.0f}**")
+    col1, col2 = st.columns(2)
+    col1.info(f"**Custo Total de Envio:** ¥ {custo_total_jpy:,.0f} (aprox. R$ {custo_total_jpy * cotacao_jpy:,.2f})")
+    
+    if total_impostos_brl > 0:
+        col2.error(f"**Reserva Estimada p/ Impostos (Todas as caixas):** R$ {total_impostos_brl:,.2f}")
 
 
 # --- GERENCIAMENTO DE ESTADO (LISTA DE ENVIO E SUÍTE) ---
 if 'itens' not in st.session_state:
-    st.session_state.itens = [{'id': 1, 'nome': 'Figure 1', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500}]
+    st.session_state.itens = [{'id': 1, 'nome': 'Figure 1', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500, 'valor': 0}]
     st.session_state.suite = []
     st.session_state.next_id = 2
 
 def add_item_cb():
-    st.session_state.itens.append({'id': st.session_state.next_id, 'nome': f'Item {st.session_state.next_id}', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
+    st.session_state.itens.append({'id': st.session_state.next_id, 'nome': f'Item {st.session_state.next_id}', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500, 'valor': 0})
     st.session_state.next_id += 1
 
 def remove_item_cb(uid):
@@ -429,16 +448,21 @@ def remove_suite_cb(uid):
     st.session_state.suite = [i for i in st.session_state.suite if i['id'] != uid]
 
 def add_suite_item_cb():
-    st.session_state.suite.append({'id': st.session_state.next_id, 'nome': f'Item Guardado', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500})
+    st.session_state.suite.append({'id': st.session_state.next_id, 'nome': f'Item Guardado', 'm1': 300, 'm2': 200, 'm3': 150, 'peso': 1500, 'valor': 0})
     st.session_state.next_id += 1
 
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v6.2", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v7.0", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
+st.sidebar.header("🛃 Impostos e Conversão")
+cotacao_jpy = st.sidebar.number_input("Cotação JPY para BRL (R$)", value=0.038, format="%.4f")
+incluir_frete_imposto = st.sidebar.checkbox("Incluir frete na base de cálculo (Regra Padrão)", value=True, help="A Receita Federal cobra o imposto sobre o Valor do Produto + Valor do Frete.")
+
+st.sidebar.divider()
 st.sidebar.header("🛠️ Configurações da Caixa Genérica")
 peso_caixa = st.sidebar.slider("Peso da Caixa Vazia (g)", 0, 2000, 300, 50)
 espessura_caixa = st.sidebar.slider("Espessura do Papelão (mm)", 0, 20, 5, 1)
@@ -455,11 +479,10 @@ usar_caixa_padrao = st.sidebar.checkbox("Forçar uso de caixa padrão (Proxy)")
 caixa_padrao_config = None
 
 if usar_caixa_padrao:
-    st.sidebar.caption("Se ativado, os itens serão testados estritamente contra as dimensões desta caixa.")
     cx_x = st.sidebar.number_input("Comprimento Máx (mm)", value=400, step=10)
     cx_y = st.sidebar.number_input("Largura Máx (mm)", value=300, step=10)
     cx_z = st.sidebar.number_input("Altura Máx (mm)", value=200, step=10)
-    cx_peso = st.sidebar.number_input("Peso Máximo Total da Caixa (g)", value=30000, step=500)
+    cx_peso = st.sidebar.number_input("Peso Máximo Total (g)", value=30000, step=500)
     caixa_padrao_config = {'x': cx_x, 'y': cx_y, 'z': cx_z, 'peso_max': cx_peso}
 
 st.sidebar.divider()
@@ -472,16 +495,10 @@ st.sidebar.header("📋 Taxas Adicionais (Por Caixa)")
 tipo_servico = st.sidebar.selectbox("Taxa de Serviço (Tabela)", ["Nenhum", "Caixa do Tesouro", "Gato Preto"])
 taxa_fixa = st.sidebar.number_input("Taxa Fixa Adicional (¥)", min_value=0, value=0, step=100)
 
-st.sidebar.divider()
-st.sidebar.header("📏 Limites Volumétricos Úteis")
-limite_epacket_interno = st.sidebar.number_input("Limite Útil ePacket (mm)", min_value=500, max_value=max_ui_epacket, value=min(850, max_ui_epacket), step=10)
-limite_air_interno = st.sidebar.number_input("Limite Útil Air Parcel (mm)", min_value=500, max_value=max_ui_air, value=min(1800, max_ui_air), step=50)
-limite_ems_interno = st.sidebar.number_input("Limite Útil EMS (mm)", min_value=500, max_value=max_ui_ems, value=min(2800, max_ui_ems), step=50)
-
 
 # --- ÁREA PRINCIPAL (LISTA DINÂMICA DE ENVIO) ---
 st.subheader("⚡ Adição Rápida (Copia e Cola)")
-st.markdown("Cole o texto de sites como **Hobby Search, HobbyLink Japan ou Mandarake**. Ex: `13.2 x 13.2 x 26 cm / 370g` ou `340mm x 325mm x 240mm / 1200g`")
+st.markdown("Cole o texto com dimensões e peso. Ex: `13.2 x 13.2 x 26 cm / 370g`")
 col_txt, col_btn = st.columns([4, 1])
 texto_rapido = col_txt.text_input("Texto com as dimensões e peso", key="input_rapido", label_visibility="collapsed")
 if col_btn.button("➕ Extrair e Adicionar"):
@@ -489,79 +506,70 @@ if col_btn.button("➕ Extrair e Adicionar"):
         dim = extrair_dimensoes_texto(texto_rapido)
         if dim:
             m1, m2, m3, p = dim
-            st.session_state.itens.append({'id': st.session_state.next_id, 'nome': f'Item Extraído {st.session_state.next_id}', 'm1': m1, 'm2': m2, 'm3': m3, 'peso': p})
+            st.session_state.itens.append({'id': st.session_state.next_id, 'nome': f'Item Extraído {st.session_state.next_id}', 'm1': m1, 'm2': m2, 'm3': m3, 'peso': p, 'valor': 0})
             st.session_state.next_id += 1
-            st.success("Item extraído e adicionado com sucesso!")
             st.rerun()
         else:
-            st.error("Não foi possível identificar as medidas. Certifique-se de incluir as 3 dimensões e o peso (ex: 31.1 x 15.4 x 14.1 cm / 514g).")
+            st.error("Não foi possível identificar as medidas.")
 
 st.divider()
 st.subheader("🛒 Itens para Envio (Caixa Atual)")
 
-hcols = st.columns([2.5, 1, 1, 1, 1, 0.4, 0.4, 0.4])
-hcols[0].write("**Nome do Produto**")
+hcols = st.columns([2, 0.8, 0.8, 0.8, 0.8, 0.8, 0.4, 0.4, 0.4])
+hcols[0].write("**Produto**")
 hcols[1].write("**M1 (mm)**")
 hcols[2].write("**M2 (mm)**")
 hcols[3].write("**M3 (mm)**")
-hcols[4].write("**Peso (g)**")
-hcols[5].write("**Suíte**")
-hcols[6].write("**Duplic.**")
-hcols[7].write("**Excluir**")
+hcols[4].write("**Peso(g)**")
+hcols[5].write("**Valor(¥)**")
+hcols[6].write("**Suíte**")
+hcols[7].write("**Dup.**")
+hcols[8].write("**Del.**")
 
 itens_para_envio = []
 
 for item in st.session_state.itens:
     uid = item['id']
-    cols = st.columns([2.5, 1, 1, 1, 1, 0.4, 0.4, 0.4])
+    if 'valor' not in item: item['valor'] = 0 # Atualização de estado legado
+    
+    cols = st.columns([2, 0.8, 0.8, 0.8, 0.8, 0.8, 0.4, 0.4, 0.4])
     
     item['nome'] = cols[0].text_input("Nome", value=item['nome'], key=f"n_{uid}", label_visibility="collapsed")
     item['m1'] = cols[1].number_input("M1", min_value=1, value=item['m1'], key=f"m1_{uid}", label_visibility="collapsed")
     item['m2'] = cols[2].number_input("M2", min_value=1, value=item['m2'], key=f"m2_{uid}", label_visibility="collapsed")
     item['m3'] = cols[3].number_input("M3", min_value=1, value=item['m3'], key=f"m3_{uid}", label_visibility="collapsed")
     item['peso'] = cols[4].number_input("Peso", min_value=1, value=item['peso'], key=f"p_{uid}", label_visibility="collapsed")
+    item['valor'] = cols[5].number_input("Valor", min_value=0, value=item['valor'], key=f"v_{uid}", label_visibility="collapsed")
     
-    # Botões
-    cols[5].button("📥", key=f"tosuite_{uid}", help="Enviar para a Suíte", on_click=to_suite_cb, args=(uid,))
-    cols[6].button("📋", key=f"dup_{uid}", help="Duplicar item", on_click=duplicate_item_cb, args=(uid,))
-    cols[7].button("❌", key=f"rem_{uid}", help="Remover item", on_click=remove_item_cb, args=(uid,))
+    cols[6].button("📥", key=f"tosuite_{uid}", on_click=to_suite_cb, args=(uid,))
+    cols[7].button("📋", key=f"dup_{uid}", on_click=duplicate_item_cb, args=(uid,))
+    cols[8].button("❌", key=f"rem_{uid}", on_click=remove_item_cb, args=(uid,))
     
     if tipo_protecao == "Individual (por item)":
         dimensoes = sorted([item['m1'] + (2*espessura_protecao), item['m2'] + (2*espessura_protecao), item['m3'] + (2*espessura_protecao)], reverse=True)
     else:
         dimensoes = sorted([item['m1'], item['m2'], item['m3']], reverse=True)
         
-    itens_para_envio.append({'nome': item['nome'], 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': item['peso']})
+    itens_para_envio.append({'nome': item['nome'], 'x': dimensoes[0], 'y': dimensoes[1], 'z': dimensoes[2], 'peso': item['peso'], 'valor': item['valor']})
 
-st.button("➕ Adicionar Novo Produto para Envio", on_click=add_item_cb)
+st.button("➕ Adicionar Produto", on_click=add_item_cb)
 
 # --- ÁREA DA SUÍTE (ESTOQUE) ---
 st.divider()
 st.subheader("📥 Minha Suíte (Estoque)")
-st.write("*(Deixe seus produtos guardados aqui. Baixe em Excel/CSV para guardar e carregar depois!)*")
 
 csv_output = io.StringIO()
-writer = csv.DictWriter(csv_output, fieldnames=["nome", "m1", "m2", "m3", "peso"])
+writer = csv.DictWriter(csv_output, fieldnames=["nome", "m1", "m2", "m3", "peso", "valor"])
 writer.writeheader()
 for item in st.session_state.suite:
-    writer.writerow({"nome": item['nome'], "m1": item['m1'], "m2": item['m2'], "m3": item['m3'], "peso": item['peso']})
+    writer.writerow({"nome": item['nome'], "m1": item['m1'], "m2": item['m2'], "m3": item['m3'], "peso": item['peso'], "valor": item.get('valor', 0)})
 
 cols_acoes_suite = st.columns([2.5, 2, 4])
-cols_acoes_suite[0].button("➕ Novo Item Direto na Suíte", on_click=add_suite_item_cb)
-cols_acoes_suite[1].download_button(
-    label="💾 Baixar Suíte (.CSV)", 
-    data=csv_output.getvalue().encode('utf-8-sig'), 
-    file_name="minha_suite.csv", 
-    mime="text/csv", 
-    help="Baixe sua suíte para abrir no Excel ou carregar no futuro."
-)
+cols_acoes_suite[0].button("➕ Novo Item na Suíte", on_click=add_suite_item_cb)
+cols_acoes_suite[1].download_button(label="💾 Baixar Suíte (.CSV)", data=csv_output.getvalue().encode('utf-8-sig'), file_name="minha_suite.csv", mime="text/csv")
 
 with st.expander("📂 Carregar Suíte Salva (Backup .CSV)"):
-    arquivo_up = st.file_uploader("Selecione o arquivo .csv modificado ou salvo anteriormente", type=["csv"])
-    
-    if arquivo_up is None:
-        st.session_state.last_uploaded = None
-        
+    arquivo_up = st.file_uploader("Selecione o arquivo .csv", type=["csv"])
     if arquivo_up is not None:
         if 'last_uploaded' not in st.session_state or st.session_state.last_uploaded != arquivo_up.name:
             try:
@@ -569,7 +577,6 @@ with st.expander("📂 Carregar Suíte Salva (Backup .CSV)"):
                 primeira_linha = content.split('\n')[0]
                 delimiter = ';' if ';' in primeira_linha else ','
                 reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
-                
                 for row in reader:
                     row_lower = {k.strip().lower(): v for k, v in row.items() if k}
                     st.session_state.suite.append({
@@ -578,35 +585,33 @@ with st.expander("📂 Carregar Suíte Salva (Backup .CSV)"):
                         'm1': int(float(row_lower.get('m1', 300))),
                         'm2': int(float(row_lower.get('m2', 200))),
                         'm3': int(float(row_lower.get('m3', 150))),
-                        'peso': int(float(row_lower.get('peso', 1500)))
+                        'peso': int(float(row_lower.get('peso', 1500))),
+                        'valor': int(float(row_lower.get('valor', 0)))
                     })
                     st.session_state.next_id += 1
-                    
                 st.session_state.last_uploaded = arquivo_up.name
-                st.success("Suíte carregada com sucesso! Feche esta guia.")
-                
+                st.success("Suíte carregada!")
             except Exception as e:
-                st.error(f"Erro ao ler o arquivo CSV. Detalhes: {e}")
+                st.error(f"Erro ao ler CSV: {e}")
 
-if not st.session_state.suite:
-    st.info("Sua suíte está vazia. Você pode adicionar itens, carregar um CSV ou enviar da lista de envio usando o botão 📥.")
-else:
-    scols_h = st.columns([2.5, 1, 1, 1, 1, 0.8, 0.4])
-    scols_h[0].write("**Nome do Produto (Suíte)**")
+if st.session_state.suite:
+    scols_h = st.columns([2, 0.8, 0.8, 0.8, 0.8, 0.8, 0.4, 0.4])
+    scols_h[0].write("**Produto (Suíte)**")
     
     for item in st.session_state.suite:
         uid = item['id']
-        cols = st.columns([2.5, 1, 1, 1, 1, 0.8, 0.4])
+        if 'valor' not in item: item['valor'] = 0
+        cols = st.columns([2, 0.8, 0.8, 0.8, 0.8, 0.8, 0.4, 0.4])
         
         item['nome'] = cols[0].text_input("Nome", value=item['nome'], key=f"sn_{uid}", label_visibility="collapsed")
         item['m1'] = cols[1].number_input("M1", min_value=1, value=item['m1'], key=f"sm1_{uid}", label_visibility="collapsed")
         item['m2'] = cols[2].number_input("M2", min_value=1, value=item['m2'], key=f"sm2_{uid}", label_visibility="collapsed")
         item['m3'] = cols[3].number_input("M3", min_value=1, value=item['m3'], key=f"sm3_{uid}", label_visibility="collapsed")
         item['peso'] = cols[4].number_input("Peso", min_value=1, value=item['peso'], key=f"sp_{uid}", label_visibility="collapsed")
+        item['valor'] = cols[5].number_input("Valor", min_value=0, value=item['valor'], key=f"sv_{uid}", label_visibility="collapsed")
         
-        cols[5].button("⬆️ Enviar", key=f"fromsuite_{uid}", help="Mover para Envio Atual", on_click=from_suite_cb, args=(uid,))
-        cols[6].button("❌", key=f"srem_{uid}", help="Remover da Suíte", on_click=remove_suite_cb, args=(uid,))
-
+        cols[6].button("⬆️", key=f"fromsuite_{uid}", on_click=from_suite_cb, args=(uid,))
+        cols[7].button("❌", key=f"srem_{uid}", on_click=remove_suite_cb, args=(uid,))
 
 # --- CÁLCULO ---
 st.divider()
@@ -616,9 +621,10 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
     estrategias = ["Regra Postal", "Forçar Cubo"]
     tipo_prot_str = "Individual" if "Individual" in tipo_protecao else "Conjunta"
     
-    limite_ext_epacket = limite_epacket_interno + overhead_epacket
-    limite_ext_air = limite_air_interno + overhead_parcel
-    limite_ext_ems = limite_ems_interno + overhead_parcel
+    # Adicionando os limites externos via overhead na execução para manter a interface limpa
+    limite_ext_epacket = min(850, max_ui_epacket) + overhead_epacket
+    limite_ext_air = min(1800, max_ui_air) + overhead_parcel
+    limite_ext_ems = min(2800, max_ui_ems) + overhead_parcel
     
     resultados_calculados = []
     
@@ -647,20 +653,13 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
                 else:
                     resultado['mod_display'] = f"{mods_usadas[0]} | (Foco: {mod}/{est_curta})"
                 
-                # O CÓDIGO CRIA UMA FLAG DE ALERTA: Esta simulação usa EMS? (0 para Não, 1 para Sim)
                 resultado['usa_ems'] = 1 if 'EMS' in mods_usadas else 0
-                    
                 resultados_calculados.append(resultado)
             
-    # O RANKING FINAL AGORA CONSIDERA O EMS:
-    # 1º Empurra pro topo quem rejeitou menos itens
-    # 2º Empurra pro fim da fila QUEM USOU EMS (O `usa_ems` garante que opções com EMS percam automaticamente de qualquer opção sem EMS)
-    # 3º Menor quantidade de caixas
-    # 4º Menor custo final
     resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['usa_ems'], len(x['caixas']), x['custo_total']))
     
     if not resultados_calculados:
-        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis dadas as restrições atuais.")
+        st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades.")
     else:
         melhor_opcao = resultados_calculados[0]
         outras_opcoes = resultados_calculados[1:10] 
@@ -669,16 +668,14 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
         
         with tab_melhor:
             if melhor_opcao['usa_ems'] == 1:
-                st.warning("⚠️ **Aviso Importante:** A melhor (ou única) opção viável acabou utilizando o **EMS**. Se puder, considere tirar alguns itens do envio para evitar a fiscalização rigorosa.")
+                st.warning("⚠️ **Aviso:** O **EMS** precisou ser acionado nesta configuração.")
                 
             st.header(f"✨ A Mais Vantajosa: {melhor_opcao['mod_display']}")
-            exibir_resultado_modalidade(melhor_opcao['mod_display'], melhor_opcao['mod_original'], melhor_opcao, tipo_servico, taxa_fixa, peso_caixa)
+            exibir_resultado_modalidade(melhor_opcao['mod_display'], melhor_opcao['mod_original'], melhor_opcao, tipo_servico, taxa_fixa, peso_caixa, cotacao_jpy, incluir_frete_imposto)
             
         with tab_outras:
             if outras_opcoes:
                 for op in outras_opcoes:
                     st.subheader(f"✈️ Alternativa: {op['mod_display']}")
-                    exibir_resultado_modalidade(op['mod_display'], op['mod_original'], op, tipo_servico, taxa_fixa, peso_caixa)
+                    exibir_resultado_modalidade(op['mod_display'], op['mod_original'], op, tipo_servico, taxa_fixa, peso_caixa, cotacao_jpy, incluir_frete_imposto)
                     st.write("---")
-            else:
-                st.write("Não há outras opções viáveis para este conjunto de itens e limites.")
