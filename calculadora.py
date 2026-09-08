@@ -237,9 +237,10 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
         cost = 0
         valid = True
         
-        # Aqui acontece a Otimização Mista (Avalia a melhor modalidade possivel para CADA caixa separadamente)
+        # Otimização Mista com Penalidade Severa para EMS
         for cx in result['caixas']:
-            melhor_custo_cx = float('inf')
+            melhor_custo_comparativo = float('inf')
+            custo_real_escolhido = 0
             melhor_mod_cx = None
             f_base_escolhido = 0
             t_serv_escolhido = 0
@@ -249,25 +250,28 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
                     f_base = estimar_frete_jpy(mod_teste, cx['peso_total'])
                     if f_base is not None:
                         t_serv = calcular_taxa_servico(cx['peso_total'], mod_teste, servico)
-                        custo_teste = f_base + t_serv + taxa_fixa
+                        custo_real = f_base + t_serv + taxa_fixa
                         
-                        if custo_teste < melhor_custo_cx:
-                            melhor_custo_cx = custo_teste
+                        # A MÁGICA AQUI: O EMS leva uma multa de 10 milhões de Ienes no cálculo interno.
+                        # Ele nunca vai vencer do Air Parcel ou ePacket, a menos que seja a única opção possível.
+                        custo_comparativo = custo_real if mod_teste != 'EMS' else custo_real + 10000000
+                        
+                        if custo_comparativo < melhor_custo_comparativo:
+                            melhor_custo_comparativo = custo_comparativo
+                            custo_real_escolhido = custo_real
                             melhor_mod_cx = mod_teste
                             f_base_escolhido = f_base
                             t_serv_escolhido = t_serv
             
-            # Se por algum motivo a caixa não atende nenhuma regra (não deveria acontecer)
             if melhor_mod_cx is None:
                 valid = False
                 break
             
-            # Salva a melhor modalidade e custo encontrado para esta caixa específica
             cx['mod_sugerida'] = melhor_mod_cx
-            cx['custo_calculado'] = melhor_custo_cx
+            cx['custo_calculado'] = custo_real_escolhido
             cx['frete_base'] = f_base_escolhido
             cx['taxa_servico'] = t_serv_escolhido
-            cost += melhor_custo_cx
+            cost += custo_real_escolhido
             
         if valid and cost < best_cost:
             best_cost = cost
@@ -431,7 +435,7 @@ def add_suite_item_cb():
 
 # --- INTERFACE VISUAL DO APLICATIVO ---
 
-st.set_page_config(page_title="Calculadora de Frete v6.1", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Calculadora de Frete v6.2", page_icon="📦", layout="wide")
 st.title("📦 Calculadora Inteligente de Frete (Japão ➔ Brasil)")
 
 # --- BARRA LATERAL ---
@@ -628,14 +632,12 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
             )
             
             if not isinstance(resultado, str) and len(resultado['caixas']) > 0:
-                # O custo e os fretes já foram escolhidos dentro do motor (Otimização Mista)
                 custo_total_jpy = sum(cx['custo_calculado'] for cx in resultado['caixas'])
                     
                 resultado['custo_total'] = custo_total_jpy
                 resultado['qtd_rejeitados'] = len(resultado['rejeitados'])
                 resultado['mod_original'] = mod 
                 
-                # Vamos identificar se rolou combo para mostrar bonitinho no título
                 mods_usadas = list(set([cx['mod_sugerida'] for cx in resultado['caixas']]))
                 mods_str = " + ".join(sorted(mods_usadas))
                 est_curta = "Postal" if est == "Regra Postal" else "Cubo"
@@ -644,23 +646,30 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
                     resultado['mod_display'] = f"Combo: {mods_str} | (Foco: {mod}/{est_curta})"
                 else:
                     resultado['mod_display'] = f"{mods_usadas[0]} | (Foco: {mod}/{est_curta})"
+                
+                # O CÓDIGO CRIA UMA FLAG DE ALERTA: Esta simulação usa EMS? (0 para Não, 1 para Sim)
+                resultado['usa_ems'] = 1 if 'EMS' in mods_usadas else 0
                     
                 resultados_calculados.append(resultado)
             
-    # Ordena: 1º menos itens rejeitados, 2º Evita o base EMS se possível, 3º Menor quantidade de caixas totais, 4º Menor Preço Final
-    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], 1 if x['mod_original'] == 'EMS' else 0, len(x['caixas']), x['custo_total']))
+    # O RANKING FINAL AGORA CONSIDERA O EMS:
+    # 1º Empurra pro topo quem rejeitou menos itens
+    # 2º Empurra pro fim da fila QUEM USOU EMS (O `usa_ems` garante que opções com EMS percam automaticamente de qualquer opção sem EMS)
+    # 3º Menor quantidade de caixas
+    # 4º Menor custo final
+    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['usa_ems'], len(x['caixas']), x['custo_total']))
     
     if not resultados_calculados:
         st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades disponíveis dadas as restrições atuais.")
     else:
         melhor_opcao = resultados_calculados[0]
-        outras_opcoes = resultados_calculados[1:10] # Mostra as 9 melhores alternativas
+        outras_opcoes = resultados_calculados[1:10] 
         
         tab_melhor, tab_outras = st.tabs(["🏆 Melhor Opção", "📦 Outras Opções"])
         
         with tab_melhor:
-            if melhor_opcao['mod_original'] == 'EMS':
-                st.warning("⚠️ **Aviso:** EMS foi selecionado como a base (ou única) opção. Lembre-se que a fiscalização tende a ser mais rigorosa.")
+            if melhor_opcao['usa_ems'] == 1:
+                st.warning("⚠️ **Aviso Importante:** A melhor (ou única) opção viável acabou utilizando o **EMS**. Se puder, considere tirar alguns itens do envio para evitar a fiscalização rigorosa.")
                 
             st.header(f"✨ A Mais Vantajosa: {melhor_opcao['mod_display']}")
             exibir_resultado_modalidade(melhor_opcao['mod_display'], melhor_opcao['mod_original'], melhor_opcao, tipo_servico, taxa_fixa, peso_caixa)
