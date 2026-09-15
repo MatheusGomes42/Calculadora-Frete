@@ -220,8 +220,8 @@ def empacotar_heuristics(itens, modalidade, limite_air, limite_ems, limite_epack
         sorted(itens, key=lambda i: i['peso']/(i['x']*i['y']*i['z'] + 1), reverse=True),
     ]
     
-    random.seed(42)
-    for _ in range(5):
+    # 50 repetições aleatórias para tentar otimizar faixas de peso/preço
+    for _ in range(50):
         shuffled = itens[:]
         random.shuffle(shuffled)
         heuristics.append(shuffled)
@@ -664,7 +664,8 @@ if st.button("🚀 Calcular Melhor Opção de Envio", type="primary", use_contai
                 resultado['usa_ems'] = 1 if 'EMS' in mods_usadas else 0
                 resultados_calculados.append(resultado)
             
-    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['usa_ems'], len(x['caixas']), x['custo_total']))
+    # Ordenação corrigida: prioriza 1) todos os itens couberam, 2) não usou EMS, 3) menor CUSTO TOTAL, 4) menor quantidade de caixas
+    resultados_calculados.sort(key=lambda x: (x['qtd_rejeitados'], x['usa_ems'], x['custo_total'], len(x['caixas'])))
     
     if not resultados_calculados:
         st.error("Nenhum dos itens selecionados pode ser enviado pelas modalidades com essas configurações.")
